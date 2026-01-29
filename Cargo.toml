@@ -1,0 +1,14 @@
+[package]
+name = "hexrust"
+version = "0.3.3"
+edition = "2021"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.10", features = ["v4_20"] }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+
+anyhow = "1"
+time = { version = "0.3", features = ["local-offset", "formatting"] }
