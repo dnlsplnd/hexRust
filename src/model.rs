@@ -7,6 +7,18 @@ pub struct IrcConfig {
     pub tls: bool,
     pub nick: String,
     pub initial_channel: String,
+<<<<<<< HEAD
+=======
+
+    // Optional server password (IRC PASS).
+    // This is required for some servers and for ZNC authentication.
+    pub server_password: Option<String>,
+
+    // Optional SASL (PLAIN).
+    // If set, the client will attempt CAP/SASL auth on connect.
+    pub sasl_username: Option<String>,
+    pub sasl_password: Option<String>,
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 }
 
 #[derive(Debug, Clone)]

@@ -12,6 +12,55 @@ trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> AsyncReadWrite for T {}
 type DynStream = Box<dyn AsyncReadWrite + Unpin + Send>;
 
+<<<<<<< HEAD
+=======
+// Minimal Base64 encoder for SASL PLAIN.
+// We avoid adding an extra dependency for this.
+fn b64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < input.len() {
+        let b0 = input[i];
+        let b1 = if i + 1 < input.len() { input[i + 1] } else { 0 };
+        let b2 = if i + 2 < input.len() { input[i + 2] } else { 0 };
+
+        let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        let c0 = ((n >> 18) & 0x3f) as usize;
+        let c1 = ((n >> 12) & 0x3f) as usize;
+        let c2 = ((n >> 6) & 0x3f) as usize;
+        let c3 = (n & 0x3f) as usize;
+
+        out.push(TABLE[c0] as char);
+        out.push(TABLE[c1] as char);
+
+        if i + 1 < input.len() {
+            out.push(TABLE[c2] as char);
+        } else {
+            out.push('=');
+        }
+
+        if i + 2 < input.len() {
+            out.push(TABLE[c3] as char);
+        } else {
+            out.push('=');
+        }
+
+        i += 3;
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaslState {
+    Idle,
+    Requested,
+    Authenticating,
+    Done,
+    Failed,
+}
+
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 pub async fn irc_run(
     conn_id: u64,
     cfg: IrcConfig,
@@ -63,6 +112,30 @@ pub async fn irc_run(
 
     let (mut rd, mut wr) = tokio::io::split(stream);
 
+<<<<<<< HEAD
+=======
+    // Optional server password (IRC PASS).
+    // We do not print the password to the UI logs.
+    if cfg.server_password.is_some() {
+        send_line(&mut wr, &format!("PASS {}", cfg.server_password.as_ref().unwrap())).await?;
+        ui_tx.send(UiEvent::Append {
+            conn_id,
+            buffer: "Status".to_string(),
+            line: format!("{} *** Using server password authentication", ts_prefix()),
+            bump_unread: true,
+            bump_highlight: false,
+        }).ok();
+    }
+
+    // Capability negotiation (for optional SASL).
+    let mut sasl_state = SaslState::Idle;
+    let want_sasl = cfg.sasl_username.is_some() && cfg.sasl_password.is_some();
+    if want_sasl {
+        sasl_state = SaslState::Requested;
+        send_line(&mut wr, "CAP LS 302").await?;
+    }
+
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
     // Identify.
     send_line(&mut wr, &format!("NICK {}", cfg.nick)).await?;
     send_line(&mut wr, &format!("USER {} 0 * :hexrust", cfg.nick)).await?;
@@ -134,6 +207,13 @@ pub async fn irc_run(
             });
         }
 
+<<<<<<< HEAD
+=======
+        if handle_sasl_line(conn_id, &line, &cfg, &mut sasl_state, &raw_tx, &ui_tx) {
+            continue;
+        }
+
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
         route_irc_line(conn_id, &line, &mut my_nick_net, &ui_tx);
     }
 
@@ -443,6 +523,96 @@ fn parse_ctcp_action(text: &str) -> String {
     inner.trim_end_matches('\u{0001}').to_string()
 }
 
+<<<<<<< HEAD
+=======
+
+fn handle_sasl_line(
+    conn_id: u64,
+    line: &str,
+    cfg: &IrcConfig,
+    sasl_state: &mut SaslState,
+    raw_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    ui_tx: &mpsc::Sender<UiEvent>,
+) -> bool {
+    // Returns true if the line was handled and should NOT be processed further.
+    let want_sasl = cfg.sasl_username.is_some() && cfg.sasl_password.is_some();
+    if !want_sasl {
+        return false;
+    }
+
+    // CAP LS
+    if line.contains(" CAP ") && line.contains(" LS ") && line.contains("sasl") {
+        // Request SASL.
+        let _ = raw_tx.send("CAP REQ :sasl".to_string());
+        ui_tx.send(UiEvent::Append {
+            conn_id,
+            buffer: "Status".to_string(),
+            line: format!("{} *** SASL: requesting capability", ts_prefix()),
+            bump_unread: true,
+            bump_highlight: false,
+        }).ok();
+        return true;
+    }
+
+    // CAP ACK
+    if line.contains(" CAP ") && line.contains(" ACK ") && line.contains("sasl") {
+        *sasl_state = SaslState::Authenticating;
+        let _ = raw_tx.send("AUTHENTICATE PLAIN".to_string());
+        ui_tx.send(UiEvent::Append {
+            conn_id,
+            buffer: "Status".to_string(),
+            line: format!("{} *** SASL: authenticating (PLAIN)", ts_prefix()),
+            bump_unread: true,
+            bump_highlight: false,
+        }).ok();
+        return true;
+    }
+
+    // AUTHENTICATE +
+    if line.starts_with("AUTHENTICATE +") {
+        let user = cfg.sasl_username.as_ref().unwrap();
+        let pass = cfg.sasl_password.as_ref().unwrap();
+        // PLAIN payload: authzid\0authcid\0passwd; we use authcid for both.
+        let payload = format!("{user}\u{0000}{user}\u{0000}{pass}");
+        let b64 = b64_encode(payload.as_bytes());
+
+        // IRC has a 400-byte limit per AUTHENTICATE chunk, but most payloads are short.
+        let _ = raw_tx.send(format!("AUTHENTICATE {b64}"));
+        return true;
+    }
+
+    // 903 success / 900 logged in
+    if line.contains(" 903 ") || line.contains(" 900 ") {
+        *sasl_state = SaslState::Done;
+        let _ = raw_tx.send("CAP END".to_string());
+        ui_tx.send(UiEvent::Append {
+            conn_id,
+            buffer: "Status".to_string(),
+            line: format!("{} *** SASL: success", ts_prefix()),
+            bump_unread: true,
+            bump_highlight: false,
+        }).ok();
+        return true;
+    }
+
+    // 904/905/906 failure
+    if line.contains(" 904 ") || line.contains(" 905 ") || line.contains(" 906 ") {
+        *sasl_state = SaslState::Failed;
+        let _ = raw_tx.send("CAP END".to_string());
+        ui_tx.send(UiEvent::Append {
+            conn_id,
+            buffer: "Status".to_string(),
+            line: format!("{} *** SASL: failed", ts_prefix()),
+            bump_unread: true,
+            bump_highlight: true,
+        }).ok();
+        return false; // still allow the line to show up
+    }
+
+    false
+}
+
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 async fn send_line<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, line: &str) -> Result<()> {
     // IRC lines must end with CRLF. We send UTF-8 bytes.
     let mut out = String::with_capacity(line.len() + 2);

@@ -1,9 +1,19 @@
 [package]
 name = "hexrust"
+<<<<<<< HEAD
 version = "0.3.3"
 edition = "2021"
 
 [dependencies]
+=======
+version = "0.5.3"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "5"
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 gtk = { package = "gtk4", version = "0.10", features = ["v4_20"] }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }

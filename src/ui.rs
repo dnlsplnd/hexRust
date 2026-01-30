@@ -7,7 +7,11 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::{
+<<<<<<< HEAD
     Application, ApplicationWindow, Button, Entry, Label, ListBox, ListBoxRow, Notebook, Orientation,
+=======
+    Application, ApplicationWindow, Button, Entry, Frame, Label, ListBox, ListBoxRow, Notebook, Orientation,
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
     Paned, ScrolledWindow, TextBuffer, TextView, WrapMode,
 };
 
@@ -113,6 +117,13 @@ pub fn build_ui(app: &Application) {
 
     let connect_btn = Button::with_label("Add Connection");
     let palette_btn = Button::with_label("Command Palette (Ctrl+P)");
+<<<<<<< HEAD
+=======
+    let profiles_btn = Button::with_label("Profiles…");
+    let find_entry = Entry::builder().placeholder_text("Find… (Ctrl+F)").build();
+    let find_next_btn = Button::with_label("Find Next");
+    let load_log_btn = Button::with_label("Load Log");
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 
     top.append(&server_entry);
     top.append(&port_entry);
@@ -120,6 +131,13 @@ pub fn build_ui(app: &Application) {
     top.append(&channel_entry);
     top.append(&connect_btn);
     top.append(&palette_btn);
+<<<<<<< HEAD
+=======
+    top.append(&profiles_btn);
+    top.append(&find_entry);
+    top.append(&find_next_btn);
+    top.append(&load_log_btn);
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 
     // Left: sidebar tree (connections + buffers)
     let sidebar = gtk::Box::new(Orientation::Vertical, 8);
@@ -198,6 +216,13 @@ pub fn build_ui(app: &Application) {
 
     theme::apply_terminal_theme();
 
+<<<<<<< HEAD
+=======
+    // Load and seed profiles (config file).
+    let profiles_path = crate::profiles::default_path().expect("profiles path");
+    crate::profiles::seed_example_if_empty(&profiles_path).ok();
+
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
     // Ensure a global Status buffer (conn_id=0) for backend logs.
     ensure_buffer(
         BufferKey::new(0, "Status"),
@@ -364,6 +389,51 @@ pub fn build_ui(app: &Application) {
             palette_clone.present();
         });
 
+<<<<<<< HEAD
+=======
+        // Profiles manager
+        let profiles_mgr = create_profiles_manager(
+            &win,
+            profiles_path.clone(),
+            &backend_tx,
+            &next_conn_id,
+            &conn_meta,
+            &notebook,
+            &tabs,
+            &page_to_buf,
+            &unread,
+            &highlights,
+            &sidebar_items,
+            &sidebar_list,
+            &current_buf,
+        );
+
+        let profiles_mgr_clone = profiles_mgr.clone();
+        profiles_btn.connect_clicked(move |_| {
+            profiles_mgr_clone.present();
+        });
+
+        // Find Next
+        {
+            let tabs = tabs.clone();
+            let current_buf = current_buf.clone();
+            let find_entry = find_entry.clone();
+            find_next_btn.connect_clicked(move |_| {
+                find_next_in_current_buffer(&find_entry.text(), &current_buf, &tabs);
+            });
+        }
+
+        // Load Log
+        {
+            let tabs = tabs.clone();
+            let current_buf = current_buf.clone();
+            let conn_meta = conn_meta.clone();
+            load_log_btn.connect_clicked(move |_| {
+                load_log_into_current_buffer(&current_buf, &conn_meta, &tabs);
+            });
+        }
+
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
         let palette_clone2 = palette.clone();
         let controller = gtk::EventControllerKey::new();
         controller.connect_key_pressed(move |_c, key, _code, state| {
@@ -483,6 +553,7 @@ pub fn build_ui(app: &Application) {
             select_buffer(&chan_key, &notebook, &tabs);
 
             // Tell backend to connect.
+<<<<<<< HEAD
             let cfg = crate::model::IrcConfig {
                 server,
                 port,
@@ -490,6 +561,9 @@ pub fn build_ui(app: &Application) {
                 nick,
                 initial_channel: channel,
             };
+=======
+            let cfg = crate::model::IrcConfig { server, port, tls: true, nick, initial_channel: channel, server_password: None, sasl_username: None, sasl_password: None };
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
             let _ = tx.send(BackendCmd::Connect { conn_id, cfg });
 
             append_to(
@@ -1276,6 +1350,7 @@ fn create_command_palette(
                     *current_buf.borrow_mut() = chan_key.clone();
                     select_buffer(&chan_key, &notebook, &tabs);
 
+<<<<<<< HEAD
                     let cfg = crate::model::IrcConfig {
                         server,
                         port,
@@ -1283,6 +1358,9 @@ fn create_command_palette(
                         nick,
                         initial_channel: chan,
                     };
+=======
+                    let cfg = crate::model::IrcConfig { server, port, tls: true, nick, initial_channel: chan, server_password: None, sasl_username: None, sasl_password: None };
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
                     let _ = tx.send(BackendCmd::Connect { conn_id, cfg });
 
                     dialog.close();
@@ -1555,3 +1633,697 @@ fn history_down(entry: &Entry, hist: &Rc<RefCell<History>>) {
         entry.set_position(-1);
     }
 }
+<<<<<<< HEAD
+=======
+
+
+
+
+fn create_profiles_manager(
+    parent: &ApplicationWindow,
+    profiles_path: std::path::PathBuf,
+    backend_tx: &Rc<RefCell<Option<mpsc::Sender<BackendCmd>>>>,
+    next_conn_id: &Rc<RefCell<u64>>,
+    conn_meta: &Rc<RefCell<HashMap<u64, ConnMeta>>>,
+    notebook: &Notebook,
+    tabs: &Rc<RefCell<HashMap<String, Tab>>>,
+    page_to_buf: &Rc<RefCell<HashMap<u32, String>>>,
+    unread: &Rc<RefCell<HashMap<String, u32>>>,
+    highlights: &Rc<RefCell<HashMap<String, u32>>>,
+    sidebar_items: &Rc<RefCell<Vec<SidebarItemKind>>>,
+    sidebar_list: &ListBox,
+    current_buf: &Rc<RefCell<BufferKey>>,
+) -> ApplicationWindow {
+    // Separate Regular vs ZNC profiles and fix "Save" by showing errors instead of silently ignoring them.
+    let win = ApplicationWindow::builder()
+        .transient_for(parent)
+        .modal(true)
+        .title("Profiles")
+        .default_width(820)
+        .default_height(560)
+        .build();
+
+    let profiles_path = Rc::new(profiles_path);
+
+    let root = gtk::Box::new(Orientation::Vertical, 10);
+    root.set_margin_top(12);
+    root.set_margin_bottom(12);
+    root.set_margin_start(12);
+    root.set_margin_end(12);
+
+    let header = Label::new(Some(&format!(
+        "Profiles file: {}\nRegular and ZNC profiles are shown separately. ZNC uses IRC PASS: username/network:password.",
+        profiles_path.display()
+    )));
+    header.set_xalign(0.0);
+
+    let tabs_nb = Notebook::new();
+    tabs_nb.set_hexpand(true);
+    tabs_nb.set_vexpand(true);
+
+    let list_regular = ListBox::new();
+    list_regular.set_vexpand(true);
+
+    let list_znc = ListBox::new();
+    list_znc.set_vexpand(true);
+
+    let scroll_regular = ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .child(&list_regular)
+        .build();
+
+    let scroll_znc = ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .child(&list_znc)
+        .build();
+
+    tabs_nb.append_page(&scroll_regular, Some(&Label::new(Some("Regular"))));
+    tabs_nb.append_page(&scroll_znc, Some(&Label::new(Some("ZNC"))));
+
+    // Bottom status label (for save/load errors).
+    let status = Label::new(Some(""));
+    status.set_xalign(0.0);
+
+    // Buttons
+    let buttons = gtk::Box::new(Orientation::Horizontal, 10);
+    let refresh_btn = Button::with_label("Refresh");
+    let add_regular_btn = Button::with_label("Add Regular");
+    let add_znc_btn = Button::with_label("Add ZNC");
+    let edit_btn = Button::with_label("Edit");
+    let del_btn = Button::with_label("Delete");
+    let connect_btn = Button::with_label("Connect");
+
+    buttons.append(&refresh_btn);
+    buttons.append(&add_regular_btn);
+    buttons.append(&add_znc_btn);
+    buttons.append(&edit_btn);
+    buttons.append(&del_btn);
+    buttons.append(&connect_btn);
+
+    root.append(&header);
+    root.append(&tabs_nb);
+    root.append(&buttons);
+    root.append(&status);
+
+    win.set_child(Some(&root));
+
+    // Helper: clear listbox.
+    let clear_list = |list: &ListBox| {
+        loop {
+            let Some(child) = list.first_child() else { break };
+            list.remove(&child);
+        }
+    };
+
+    // Populate both lists from file.
+    let populate: Rc<dyn Fn()> = {
+        let list_regular = list_regular.clone();
+        let list_znc = list_znc.clone();
+        let profiles_path = profiles_path.clone();
+        let status = status.clone();
+
+        Rc::new(move || {
+            clear_list(&list_regular);
+            clear_list(&list_znc);
+
+            let pf = match crate::profiles::load(&profiles_path) {
+                Ok(pf) => pf,
+                Err(e) => {
+                    status.set_text(&format!("Load failed: {e}"));
+                    return;
+                }
+            };
+
+            status.set_text("");
+
+            for p in pf.profiles.iter() {
+                let is_znc = p.znc_username.is_some() && p.znc_password.is_some();
+
+                let row = ListBoxRow::new();
+                row.set_widget_name(&p.name);
+
+                let text = if is_znc {
+                    format!(
+                        "{}  →  {}:{}  {}  nick={}  chan={}  znc_user={}  net={}",
+                        p.name,
+                        p.server,
+                        p.port,
+                        if p.tls { "TLS" } else { "PLAINTEXT" },
+                        p.nick,
+                        p.initial_channel,
+                        p.znc_username.clone().unwrap_or_default(),
+                        p.znc_network.clone().unwrap_or_default(),
+                    )
+                } else {
+                    format!(
+                        "{}  →  {}:{}  {}  nick={}  chan={}  sasl={}",
+                        p.name,
+                        p.server,
+                        p.port,
+                        if p.tls { "TLS" } else { "PLAINTEXT" },
+                        p.nick,
+                        p.initial_channel,
+                        if p.sasl_username.is_some() { "yes" } else { "no" }
+                    )
+                };
+
+                let label = Label::new(Some(&text));
+                label.set_xalign(0.0);
+                row.set_child(Some(&label));
+
+                if is_znc {
+                    list_znc.append(&row);
+                } else {
+                    list_regular.append(&row);
+                }
+            }
+        })
+    };
+
+    // Initial populate.
+    (populate)();
+
+    // Refresh
+    {
+        let populate = populate.clone();
+        refresh_btn.connect_clicked(move |_| (populate)());
+    }
+
+    // Editor dialog (shared for both Regular and ZNC).
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum EditorKind {
+        Regular,
+        Znc,
+    }
+
+    let open_editor: Rc<dyn Fn(EditorKind, Option<crate::profiles::Profile>)> = {
+        let parent2 = win.clone();
+        let profiles_path = profiles_path.clone();
+        let populate = populate.clone();
+        let status_global = status.clone();
+
+        Rc::new(move |kind: EditorKind, existing: Option<crate::profiles::Profile>| {
+            let is_edit = existing.is_some();
+            let dialog = ApplicationWindow::builder()
+                .transient_for(&parent2)
+                .modal(true)
+                .title(if is_edit { "Edit Profile" } else { "Add Profile" })
+                .default_width(620)
+                .default_height(620)
+                .build();
+
+            let root = gtk::Box::new(Orientation::Vertical, 10);
+            root.set_margin_top(12);
+            root.set_margin_bottom(12);
+            root.set_margin_start(12);
+            root.set_margin_end(12);
+
+            let hint = Label::new(Some(
+                "Regular profiles: normal server connection.\nZNC profiles: fill ZNC fields and the client will send PASS username/network:password.",
+            ));
+            hint.set_xalign(0.0);
+
+            // SERVER section
+            let server_frame = Frame::new(Some("Server"));
+            let server_box = gtk::Box::new(Orientation::Vertical, 8);
+            server_box.set_margin_top(8);
+            server_box.set_margin_bottom(8);
+            server_box.set_margin_start(8);
+            server_box.set_margin_end(8);
+
+            let name = Entry::builder().placeholder_text("Profile name").build();
+            let server = Entry::builder().placeholder_text("Server host").build();
+            let port = Entry::builder().placeholder_text("Port").text("6697").build();
+            let tls = Entry::builder().placeholder_text("TLS (true/false)").text("true").build();
+            let nick = Entry::builder().placeholder_text("Nick").build();
+            let chan = Entry::builder().placeholder_text("Initial channel").build();
+
+            server_box.append(&Label::new(Some("Name")));
+            server_box.append(&name);
+            server_box.append(&Label::new(Some("Server")));
+            server_box.append(&server);
+            server_box.append(&Label::new(Some("Port")));
+            server_box.append(&port);
+            server_box.append(&Label::new(Some("TLS")));
+            server_box.append(&tls);
+            server_box.append(&Label::new(Some("Nick")));
+            server_box.append(&nick);
+            server_box.append(&Label::new(Some("Initial channel")));
+            server_box.append(&chan);
+
+            server_frame.set_child(Some(&server_box));
+
+            // ZNC section (separate)
+            let znc_frame = Frame::new(Some("ZNC (optional)"));
+            let znc_box = gtk::Box::new(Orientation::Vertical, 8);
+            znc_box.set_margin_top(8);
+            znc_box.set_margin_bottom(8);
+            znc_box.set_margin_start(8);
+            znc_box.set_margin_end(8);
+
+            let znc_user = Entry::builder().placeholder_text("ZNC username").build();
+            let znc_net = Entry::builder().placeholder_text("ZNC network (optional)").build();
+            let znc_pass = Entry::builder().placeholder_text("ZNC server password").build();
+
+            znc_box.append(&Label::new(Some("ZNC username")));
+            znc_box.append(&znc_user);
+            znc_box.append(&Label::new(Some("ZNC network (optional)")));
+            znc_box.append(&znc_net);
+            znc_box.append(&Label::new(Some("ZNC server password")));
+            znc_box.append(&znc_pass);
+
+            let znc_note = Label::new(Some(
+                "PASS format sent to server:\n  username:password\n  username/network:password",
+            ));
+            znc_note.set_xalign(0.0);
+            znc_box.append(&znc_note);
+
+            znc_frame.set_child(Some(&znc_box));
+
+            // SASL section (optional)
+            let sasl_frame = Frame::new(Some("SASL (optional)"));
+            let sasl_box = gtk::Box::new(Orientation::Vertical, 8);
+            sasl_box.set_margin_top(8);
+            sasl_box.set_margin_bottom(8);
+            sasl_box.set_margin_start(8);
+            sasl_box.set_margin_end(8);
+
+            let sasl_user = Entry::builder().placeholder_text("SASL username").build();
+            let sasl_pass = Entry::builder().placeholder_text("SASL password").build();
+
+            sasl_box.append(&Label::new(Some("SASL username")));
+            sasl_box.append(&sasl_user);
+            sasl_box.append(&Label::new(Some("SASL password")));
+            sasl_box.append(&sasl_pass);
+
+            sasl_frame.set_child(Some(&sasl_box));
+
+            // Dialog status label
+            let dialog_status = Label::new(Some(""));
+            dialog_status.set_xalign(0.0);
+
+            // Buttons
+            let btn_row = gtk::Box::new(Orientation::Horizontal, 10);
+            let save_btn = Button::with_label("Save");
+            let cancel_btn = Button::with_label("Cancel");
+            btn_row.append(&save_btn);
+            btn_row.append(&cancel_btn);
+
+            // Prefill from existing or defaults
+            if let Some(p) = existing.clone() {
+                name.set_text(&p.name);
+                server.set_text(&p.server);
+                port.set_text(&p.port.to_string());
+                tls.set_text(if p.tls { "true" } else { "false" });
+                nick.set_text(&p.nick);
+                chan.set_text(&p.initial_channel);
+
+                if let Some(u) = p.znc_username {
+                    znc_user.set_text(&u);
+                }
+                if let Some(n) = p.znc_network {
+                    znc_net.set_text(&n);
+                }
+                if let Some(pw) = p.znc_password {
+                    znc_pass.set_text(&pw);
+                }
+
+                if let Some(u) = p.sasl_username {
+                    sasl_user.set_text(&u);
+                }
+                if let Some(pw) = p.sasl_password {
+                    sasl_pass.set_text(&pw);
+                }
+            } else if kind == EditorKind::Znc {
+                // Small hint defaults for ZNC adds.
+                port.set_text("6697");
+                tls.set_text("true");
+            }
+
+            // Build UI
+            root.append(&hint);
+            root.append(&server_frame);
+            root.append(&znc_frame);
+            root.append(&sasl_frame);
+            root.append(&btn_row);
+            root.append(&dialog_status);
+
+            dialog.set_child(Some(&root));
+
+            cancel_btn.connect_clicked({
+                let dialog = dialog.clone();
+                move |_| dialog.close()
+            });
+
+            save_btn.connect_clicked({
+                let dialog = dialog.clone();
+                let profiles_path = profiles_path.clone();
+                let populate = populate.clone();
+                let dialog_status = dialog_status.clone();
+                let status_global = status_global.clone();
+
+                let name = name.clone();
+                let server = server.clone();
+                let port = port.clone();
+                let tls = tls.clone();
+                let nick = nick.clone();
+                let chan = chan.clone();
+
+                let znc_user = znc_user.clone();
+                let znc_net = znc_net.clone();
+                let znc_pass = znc_pass.clone();
+
+                let sasl_user = sasl_user.clone();
+                let sasl_pass = sasl_pass.clone();
+
+                move |_| {
+                    dialog_status.set_text("");
+
+                    let name_v = name.text().trim().to_string();
+                    let server_v = server.text().trim().to_string();
+                    let port_v: u16 = port.text().trim().parse().unwrap_or(6697);
+                    let tls_v = tls.text().trim().eq_ignore_ascii_case("true");
+                    let nick_v = nick.text().trim().to_string();
+                    let chan_v = chan.text().trim().to_string();
+
+                    if name_v.is_empty() || server_v.is_empty() || nick_v.is_empty() || chan_v.is_empty() {
+                        dialog_status.set_text("Missing required fields: name, server, nick, initial channel.");
+                        return;
+                    }
+
+                    let znc_u = znc_user.text().trim().to_string();
+                    let znc_n = znc_net.text().trim().to_string();
+                    let znc_p = znc_pass.text().trim().to_string();
+
+                    let znc_username = if znc_u.is_empty() { None } else { Some(znc_u) };
+                    let znc_network = if znc_n.is_empty() { None } else { Some(znc_n) };
+                    let znc_password = if znc_p.is_empty() { None } else { Some(znc_p) };
+
+                    let sasl_u = sasl_user.text().trim().to_string();
+                    let sasl_p = sasl_pass.text().trim().to_string();
+                    let sasl_username = if sasl_u.is_empty() { None } else { Some(sasl_u) };
+                    let sasl_password = if sasl_p.is_empty() { None } else { Some(sasl_p) };
+
+                    let new_prof = crate::profiles::Profile {
+                        name: name_v.clone(),
+                        server: server_v,
+                        port: port_v,
+                        tls: tls_v,
+                        nick: nick_v,
+                        initial_channel: chan_v,
+                        znc_username,
+                        znc_network,
+                        znc_password,
+                        sasl_username,
+                        sasl_password,
+                    };
+
+                    let mut pf = match crate::profiles::load(&profiles_path) {
+                        Ok(pf) => pf,
+                        Err(e) => {
+                            dialog_status.set_text(&format!("Load failed: {e}"));
+                            return;
+                        }
+                    };
+
+                    // Upsert by name.
+                    if let Some(existing) = pf.profiles.iter_mut().find(|p| p.name == name_v) {
+                        *existing = new_prof;
+                    } else {
+                        pf.profiles.push(new_prof);
+                    }
+
+                    pf.profiles
+                        .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+                    if let Err(e) = crate::profiles::save(&profiles_path, &pf) {
+                        dialog_status.set_text(&format!("Save failed: {e}"));
+                        status_global.set_text(&format!("Save failed: {e}"));
+                        return;
+                    }
+
+                    status_global.set_text("Saved profiles.toml");
+                    (populate)();
+                    dialog.close();
+                }
+            });
+
+            dialog.present();
+        })
+    };
+
+    // Add Regular
+    {
+        let open_editor = open_editor.clone();
+        add_regular_btn.connect_clicked(move |_| (open_editor)(EditorKind::Regular, None));
+    }
+
+    // Add ZNC
+    {
+        let open_editor = open_editor.clone();
+        add_znc_btn.connect_clicked(move |_| (open_editor)(EditorKind::Znc, None));
+    }
+
+    // Helper: get currently selected profile name depending on active tab.
+    let get_selected_name: Rc<dyn Fn() -> Option<String>> = {
+        let tabs_nb = tabs_nb.clone();
+        let list_regular = list_regular.clone();
+        let list_znc = list_znc.clone();
+
+        Rc::new(move || {
+            let page = tabs_nb.current_page().unwrap_or(0);
+            let list = if page == 1 { &list_znc } else { &list_regular };
+            let row = list.selected_row()?;
+            let name = row.widget_name().to_string();
+            if name.is_empty() { None } else { Some(name) }
+        })
+    };
+
+    // Edit selected
+    {
+        let profiles_path = profiles_path.clone();
+        let get_selected_name = get_selected_name.clone();
+        let open_editor = open_editor.clone();
+        let tabs_nb = tabs_nb.clone();
+
+        edit_btn.connect_clicked(move |_| {
+            let Some(name) = (get_selected_name)() else { return };
+
+            let pf = match crate::profiles::load(&profiles_path) {
+                Ok(pf) => pf,
+                Err(_) => return,
+            };
+
+            let Some(p) = pf.profiles.into_iter().find(|p| p.name == name) else { return };
+
+            // Choose editor kind based on current tab.
+            let page = tabs_nb.current_page().unwrap_or(0);
+            let kind = if page == 1 { EditorKind::Znc } else { EditorKind::Regular };
+            (open_editor)(kind, Some(p));
+        });
+    }
+
+    // Delete selected
+    {
+        let profiles_path = profiles_path.clone();
+        let get_selected_name = get_selected_name.clone();
+        let populate = populate.clone();
+        let status = status.clone();
+
+        del_btn.connect_clicked(move |_| {
+            let Some(name) = (get_selected_name)() else { return };
+
+            let mut pf = match crate::profiles::load(&profiles_path) {
+                Ok(pf) => pf,
+                Err(e) => {
+                    status.set_text(&format!("Load failed: {e}"));
+                    return;
+                }
+            };
+            pf.profiles.retain(|p| p.name != name);
+
+            if let Err(e) = crate::profiles::save(&profiles_path, &pf) {
+                status.set_text(&format!("Save failed: {e}"));
+                return;
+            }
+
+            status.set_text("Deleted profile");
+            (populate)();
+        });
+    }
+
+    // Connect selected
+    {
+        let profiles_path = profiles_path.clone();
+        let get_selected_name = get_selected_name.clone();
+        let backend_tx = backend_tx.clone();
+        let next_conn_id = next_conn_id.clone();
+        let conn_meta = conn_meta.clone();
+
+        let notebook = notebook.clone();
+        let tabs = tabs.clone();
+        let page_to_buf = page_to_buf.clone();
+        let unread = unread.clone();
+        let highlights = highlights.clone();
+
+        let sidebar_items = sidebar_items.clone();
+        let sidebar_list = sidebar_list.clone();
+
+        let current_buf = current_buf.clone();
+        let win_close = win.clone();
+        let status = status.clone();
+
+        connect_btn.connect_clicked(move |_| {
+            let Some(name) = (get_selected_name)() else { return };
+
+            let Some(tx) = backend_tx.borrow().clone() else { return };
+
+            let pf = match crate::profiles::load(&profiles_path) {
+                Ok(pf) => pf,
+                Err(e) => {
+                    status.set_text(&format!("Load failed: {e}"));
+                    return;
+                }
+            };
+
+            let Some(p) = pf.profiles.into_iter().find(|p| p.name == name) else { return };
+
+            let conn_id = {
+                let mut n = next_conn_id.borrow_mut();
+                let id = *n;
+                *n += 1;
+                id
+            };
+
+            conn_meta.borrow_mut().insert(
+                conn_id,
+                ConnMeta {
+                    server: p.server.clone(),
+                    nick: p.nick.clone(),
+                    default_target: p.initial_channel.clone(),
+                },
+            );
+
+            add_sidebar_connection(conn_id, &p.server, &sidebar_items, &sidebar_list);
+
+            let status_key = BufferKey::new(conn_id, "Status");
+            let status_disp = display_for_buffer(&status_key, &conn_meta.borrow());
+            ensure_buffer(
+                status_key.clone(),
+                status_disp.clone(),
+                false,
+                &notebook,
+                &tabs,
+                &page_to_buf,
+                &unread,
+                &highlights,
+            );
+            add_sidebar_buffer(
+                &status_key,
+                &status_disp,
+                &sidebar_items,
+                &sidebar_list,
+                &conn_meta.borrow(),
+            );
+
+            let chan_key = BufferKey::new(conn_id, p.initial_channel.clone());
+            let chan_disp = display_for_buffer(&chan_key, &conn_meta.borrow());
+            ensure_buffer(
+                chan_key.clone(),
+                chan_disp.clone(),
+                true,
+                &notebook,
+                &tabs,
+                &page_to_buf,
+                &unread,
+                &highlights,
+            );
+            add_sidebar_buffer(
+                &chan_key,
+                &chan_disp,
+                &sidebar_items,
+                &sidebar_list,
+                &conn_meta.borrow(),
+            );
+
+            *current_buf.borrow_mut() = chan_key.clone();
+            select_buffer(&chan_key, &notebook, &tabs);
+
+            let cfg = p.to_irc_config();
+            let _ = tx.send(BackendCmd::Connect { conn_id, cfg });
+
+            status.set_text("Connecting…");
+            win_close.close();
+        });
+    }
+
+    win.present();
+    win
+}
+
+
+fn find_next_in_current_buffer(
+    query: &str,
+    current_buf: &Rc<RefCell<BufferKey>>,
+    tabs: &Rc<RefCell<HashMap<String, Tab>>>,
+) {
+    let q = query.trim();
+    if q.is_empty() {
+        return;
+    }
+
+    let key = current_buf.borrow().as_string();
+    let (buf, view) = {
+        let tabs_b = tabs.borrow();
+        let Some(tab) = tabs_b.get(&key) else { return };
+        (tab.buffer.clone(), tab.view.clone())
+    };
+
+    let buf: TextBuffer = buf;
+
+    // Start from current selection end, otherwise from start.
+    let mut start = buf.start_iter();
+    let mut end = buf.end_iter();
+
+    if let Some((_s, e)) = buf.selection_bounds() {
+        start = e;
+        end = buf.end_iter();
+    }
+
+    // Search forward, then wrap to start.
+    let found = start.forward_search(q, gtk::TextSearchFlags::CASE_INSENSITIVE, Some(&end))
+        .or_else(|| buf.start_iter().forward_search(q, gtk::TextSearchFlags::CASE_INSENSITIVE, Some(&buf.end_iter())));
+
+    if let Some((mut m_start, m_end)) = found {
+        buf.select_range(&m_start, &m_end);
+        view.scroll_to_iter(&mut m_start, 0.0, false, 0.0, 0.0);
+    }
+}
+
+fn load_log_into_current_buffer(
+    current_buf: &Rc<RefCell<BufferKey>>,
+    conn_meta: &Rc<RefCell<HashMap<u64, ConnMeta>>>,
+    tabs: &Rc<RefCell<HashMap<String, Tab>>>,
+) {
+    let key = current_buf.borrow().clone();
+    let conn_id = key.conn_id;
+    let buffer_name = key.name.clone();
+
+    let server = {
+        let meta_b = conn_meta.borrow();
+        let Some(meta) = meta_b.get(&conn_id) else { return };
+        meta.server.clone()
+    };
+
+    let Ok(text) = crate::logging::read_all(&server, &buffer_name) else { return };
+
+    let buf = {
+        let tabs_b = tabs.borrow();
+        let Some(tab) = tabs_b.get(&key.as_string()) else { return };
+        tab.buffer.clone()
+    };
+    buf.set_text(&text);
+}
+>>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
