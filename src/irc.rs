@@ -530,15 +530,52 @@ fn handle_sasl_line(
     }
 
     // CAP LS
-    if line.contains(" CAP ") && line.contains(" LS ") && line.contains("sasl") {
-        // Request SASL.
-        let _ = raw_tx.send("CAP REQ :sasl".to_string());
+    if line.contains(" CAP ") && line.contains(" LS ") {
+        if line.contains("sasl") {
+            // Request SASL.
+            let _ = raw_tx.send("CAP REQ :sasl".to_string());
+            ui_tx.send(UiEvent::Append {
+                conn_id,
+                buffer: "Status".to_string(),
+                line: format!("{} *** SASL: requesting capability", ts_prefix()),
+                bump_unread: true,
+                bump_highlight: false,
+            }).ok();
+            return true;
+        }
+
+        // With CAP LS 302 the list may be split over several lines; a "*"
+        // in place of the final parameter means more are still coming, so
+        // sasl may yet be advertised.
+        if line.contains(" LS * :") {
+            return true;
+        }
+
+        // The server offers no SASL. We still have to close capability
+        // negotiation, otherwise it holds registration open indefinitely
+        // and we never reach 001.
+        *sasl_state = SaslState::Failed;
+        let _ = raw_tx.send("CAP END".to_string());
         ui_tx.send(UiEvent::Append {
             conn_id,
             buffer: "Status".to_string(),
-            line: format!("{} *** SASL: requesting capability", ts_prefix()),
+            line: format!("{} *** SASL: not offered by server, continuing without it", ts_prefix()),
             bump_unread: true,
             bump_highlight: false,
+        }).ok();
+        return true;
+    }
+
+    // CAP NAK: the server refused the capability we asked for.
+    if line.contains(" CAP ") && line.contains(" NAK ") {
+        *sasl_state = SaslState::Failed;
+        let _ = raw_tx.send("CAP END".to_string());
+        ui_tx.send(UiEvent::Append {
+            conn_id,
+            buffer: "Status".to_string(),
+            line: format!("{} *** SASL: refused by server, continuing without it", ts_prefix()),
+            bump_unread: true,
+            bump_highlight: true,
         }).ok();
         return true;
     }

@@ -765,6 +765,15 @@ pub fn build_ui(app: &Application) {
 
                         append_to(&key, &line, &tabs);
 
+                        // Persist to the on-disk log, using the same
+                        // server/buffer keys that "Load Log" reads back.
+                        {
+                            let meta_b = conn_meta.borrow();
+                            if let Some(meta) = meta_b.get(&conn_id) {
+                                let _ = crate::logging::append_line(&meta.server, &buffer, &line);
+                            }
+                        }
+
                         // Bump counters if not the active buffer.
                         let active = current_buf.borrow().clone();
                         if bump_unread && active != key {
