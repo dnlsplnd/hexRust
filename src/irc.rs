@@ -12,8 +12,6 @@ trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> AsyncReadWrite for T {}
 type DynStream = Box<dyn AsyncReadWrite + Unpin + Send>;
 
-<<<<<<< HEAD
-=======
 // Minimal Base64 encoder for SASL PLAIN.
 // We avoid adding an extra dependency for this.
 fn b64_encode(input: &[u8]) -> String {
@@ -60,7 +58,6 @@ enum SaslState {
     Failed,
 }
 
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 pub async fn irc_run(
     conn_id: u64,
     cfg: IrcConfig,
@@ -112,8 +109,6 @@ pub async fn irc_run(
 
     let (mut rd, mut wr) = tokio::io::split(stream);
 
-<<<<<<< HEAD
-=======
     // Optional server password (IRC PASS).
     // We do not print the password to the UI logs.
     if cfg.server_password.is_some() {
@@ -135,7 +130,6 @@ pub async fn irc_run(
         send_line(&mut wr, "CAP LS 302").await?;
     }
 
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
     // Identify.
     send_line(&mut wr, &format!("NICK {}", cfg.nick)).await?;
     send_line(&mut wr, &format!("USER {} 0 * :hexrust", cfg.nick)).await?;
@@ -207,13 +201,10 @@ pub async fn irc_run(
             });
         }
 
-<<<<<<< HEAD
-=======
         if handle_sasl_line(conn_id, &line, &cfg, &mut sasl_state, &raw_tx, &ui_tx) {
             continue;
         }
 
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
         route_irc_line(conn_id, &line, &mut my_nick_net, &ui_tx);
     }
 
@@ -523,8 +514,6 @@ fn parse_ctcp_action(text: &str) -> String {
     inner.trim_end_matches('\u{0001}').to_string()
 }
 
-<<<<<<< HEAD
-=======
 
 fn handle_sasl_line(
     conn_id: u64,
@@ -612,7 +601,6 @@ fn handle_sasl_line(
     false
 }
 
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 async fn send_line<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, line: &str) -> Result<()> {
     // IRC lines must end with CRLF. We send UTF-8 bytes.
     let mut out = String::with_capacity(line.len() + 2);

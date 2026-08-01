@@ -7,11 +7,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::{
-<<<<<<< HEAD
-    Application, ApplicationWindow, Button, Entry, Label, ListBox, ListBoxRow, Notebook, Orientation,
-=======
     Application, ApplicationWindow, Button, Entry, Frame, Label, ListBox, ListBoxRow, Notebook, Orientation,
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
     Paned, ScrolledWindow, TextBuffer, TextView, WrapMode,
 };
 
@@ -117,13 +113,10 @@ pub fn build_ui(app: &Application) {
 
     let connect_btn = Button::with_label("Add Connection");
     let palette_btn = Button::with_label("Command Palette (Ctrl+P)");
-<<<<<<< HEAD
-=======
     let profiles_btn = Button::with_label("Profiles…");
     let find_entry = Entry::builder().placeholder_text("Find… (Ctrl+F)").build();
     let find_next_btn = Button::with_label("Find Next");
     let load_log_btn = Button::with_label("Load Log");
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 
     top.append(&server_entry);
     top.append(&port_entry);
@@ -131,13 +124,10 @@ pub fn build_ui(app: &Application) {
     top.append(&channel_entry);
     top.append(&connect_btn);
     top.append(&palette_btn);
-<<<<<<< HEAD
-=======
     top.append(&profiles_btn);
     top.append(&find_entry);
     top.append(&find_next_btn);
     top.append(&load_log_btn);
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 
     // Left: sidebar tree (connections + buffers)
     let sidebar = gtk::Box::new(Orientation::Vertical, 8);
@@ -216,13 +206,10 @@ pub fn build_ui(app: &Application) {
 
     theme::apply_terminal_theme();
 
-<<<<<<< HEAD
-=======
     // Load and seed profiles (config file).
     let profiles_path = crate::profiles::default_path().expect("profiles path");
     crate::profiles::seed_example_if_empty(&profiles_path).ok();
 
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
     // Ensure a global Status buffer (conn_id=0) for backend logs.
     ensure_buffer(
         BufferKey::new(0, "Status"),
@@ -389,8 +376,6 @@ pub fn build_ui(app: &Application) {
             palette_clone.present();
         });
 
-<<<<<<< HEAD
-=======
         // Profiles manager
         let profiles_mgr = create_profiles_manager(
             &win,
@@ -433,7 +418,6 @@ pub fn build_ui(app: &Application) {
             });
         }
 
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
         let palette_clone2 = palette.clone();
         let controller = gtk::EventControllerKey::new();
         controller.connect_key_pressed(move |_c, key, _code, state| {
@@ -553,17 +537,7 @@ pub fn build_ui(app: &Application) {
             select_buffer(&chan_key, &notebook, &tabs);
 
             // Tell backend to connect.
-<<<<<<< HEAD
-            let cfg = crate::model::IrcConfig {
-                server,
-                port,
-                tls: true,
-                nick,
-                initial_channel: channel,
-            };
-=======
             let cfg = crate::model::IrcConfig { server, port, tls: true, nick, initial_channel: channel, server_password: None, sasl_username: None, sasl_password: None };
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
             let _ = tx.send(BackendCmd::Connect { conn_id, cfg });
 
             append_to(
@@ -1350,17 +1324,7 @@ fn create_command_palette(
                     *current_buf.borrow_mut() = chan_key.clone();
                     select_buffer(&chan_key, &notebook, &tabs);
 
-<<<<<<< HEAD
-                    let cfg = crate::model::IrcConfig {
-                        server,
-                        port,
-                        tls: true,
-                        nick,
-                        initial_channel: chan,
-                    };
-=======
                     let cfg = crate::model::IrcConfig { server, port, tls: true, nick, initial_channel: chan, server_password: None, sasl_username: None, sasl_password: None };
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
                     let _ = tx.send(BackendCmd::Connect { conn_id, cfg });
 
                     dialog.close();
@@ -1633,8 +1597,6 @@ fn history_down(entry: &Entry, hist: &Rc<RefCell<History>>) {
         entry.set_position(-1);
     }
 }
-<<<<<<< HEAD
-=======
 
 
 
@@ -2326,4 +2288,3 @@ fn load_log_into_current_buffer(
     };
     buf.set_text(&text);
 }
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
