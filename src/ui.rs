@@ -204,7 +204,7 @@ pub fn build_ui(app: &Application) {
 
     win.set_child(Some(&root));
 
-    theme::apply_terminal_theme();
+    theme::apply_tron_theme();
 
     // Load and seed profiles (config file).
     let profiles_path = crate::profiles::default_path().expect("profiles path");
@@ -2230,7 +2230,9 @@ fn create_profiles_manager(
         });
     }
 
-    win.present();
+    // Deliberately not presented here: this window is built once at startup
+    // and shown by the "Profiles…" button. Presenting on construction popped
+    // the dialog over the main window on every launch.
     win
 }
 
