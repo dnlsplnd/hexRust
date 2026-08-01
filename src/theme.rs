@@ -96,6 +96,10 @@ scale slider {
     outline: 1px solid #00ff00;
     border: 0px;
     border-radius: 0px;
+    /* Adwaita gives sliders negative margins for the overlay-indicator
+       look; combined with our min size that computes to a negative
+       minimum, so reset it. */
+    margin: 0;
     min-width: 12px;
     min-height: 12px;
 }
