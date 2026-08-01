@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# hexrust (multi-server) v0.3.3
-=======
 # hexrust (multi-server) v0.5.0
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
 
 This build fixes GTK ListBoxRow metadata handling:
 - No more `row.set_data()` / `row.data()` (those are unsafe / pointer-based in gtk4-rs)
@@ -30,15 +26,6 @@ cargo run
 ```
 
 
-<<<<<<< HEAD
-## v0.3.3 change
-- User list is now sorted by rank (~ & @ % +), then alphabetically.
-- NAMES parsing keeps prefixes to reflect operator status.
-
-## v0.3.3 fix
-- Fixed a Rust borrow-lifetime issue in the AddUser handler (E0716).
-- Removed an unused import warning in irc.rs.
-=======
 ## v0.5.0 change
 - User list is now sorted by rank (~ & @ % +), then alphabetically.
 - NAMES parsing keeps prefixes to reflect operator status.
@@ -112,4 +99,3 @@ Major step: **persistent logs + buffer search**
 
 ## v0.5.2
 - Fixed RefCell borrow lifetime issues in Find/Load Log helpers.
->>>>>>> 843bf2f (v0.5.3 – persistent logs, search, ZNC profiles, terminal theme)
