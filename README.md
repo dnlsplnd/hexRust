@@ -1,101 +1,106 @@
-# hexrust (multi-server) v0.5.0
+# hexrust
 
-This build fixes GTK ListBoxRow metadata handling:
-- No more `row.set_data()` / `row.data()` (those are unsafe / pointer-based in gtk4-rs)
-- Buffer keys are stored in `row.set_widget_name(...)` and read back via `row.widget_name()`
+A multi-server IRC client in Rust and GTK4.
 
-Major features:
-- Multiple servers at once (each connection has its own conn_id)
-- Left sidebar "tree" of servers + buffers (click to switch)
-- Per-buffer unread + highlight counters: `(!h, u)`
-- Highlights when your nick is mentioned (or any direct PM)
-- Command palette (Ctrl+P) with quick `connect/join/switch/raw`
-- Terminal theme: black background + green text everywhere
-- UTF-8 safe decoding for incoming bytes
+- Several servers at once, each with its own buffers
+- Sidebar tree of servers and buffers, with per-buffer unread and highlight
+  counters shown as `(!h, u)`
+- Highlights on your nick and on any direct message
+- Command palette (Ctrl+P) for quick `connect` / `join` / `switch` / `raw`
+- Saved connection profiles, with SASL (PLAIN) and ZNC support
+- Persistent per-buffer logs, plus in-buffer search
+- TRON theme: cyan on black, amber for the active tab
 
-## Fedora 43 dependencies
+## Build and run
+
+Fedora dependencies:
 
 ```bash
-sudo dnf install -y gtk4-devel openssl-devel pkgconf-pkg-config
+sudo dnf install -y rust cargo gtk4-devel openssl-devel pkgconf-pkg-config
 ```
-
-## Run
 
 ```bash
 cargo run
 ```
 
+## Commands
 
-## v0.5.0 change
-- User list is now sorted by rank (~ & @ % +), then alphabetically.
-- NAMES parsing keeps prefixes to reflect operator status.
+Anything not listed here is passed straight to the server, so `/WALLOPS hi`
+works without hexrust needing to know the command.
 
-## v0.5.0 fix
-- Fixed a Rust borrow-lifetime issue in the AddUser handler (E0716).
-- Removed an unused import warning in irc.rs.
+| Command | Effect |
+| --- | --- |
+| `/join #chan` | Join a channel |
+| `/part [#chan] [reason]` | Leave a channel, defaulting to the current one |
+| `/query <nick> [text]` | Open a private buffer, optionally sending a line |
+| `/msg <nick> <text>` | Send a private message |
+| `/me <action>` | Send a CTCP ACTION |
+| `/notice <target> <text>` | Send a notice |
+| `/nick <newnick>` | Change nick |
+| `/topic [#chan] [text]` | Show or set the topic |
+| `/names [#chan]` | Refresh the user list |
+| `/whois <nick>`, `/whowas <nick>` | Look someone up |
+| `/kick [#chan] <nick> [reason]` | Kick a user |
+| `/ban <mask>`, `/unban <mask>` | Set or clear a ban |
+| `/op`, `/deop`, `/voice`, `/devoice` | Channel modes, one or more nicks at a time |
+| `/mode [target] <modes>` | Set modes; the target defaults to the current channel |
+| `/invite <nick> [#chan]` | Invite someone |
+| `/away [reason]`, `/back` | Set or clear away status |
+| `/ctcp <target> <cmd>`, `/ping <nick>`, `/version [nick]` | CTCP requests |
+| `/list [params]`, `/motd` | Server queries |
+| `/oper <user> <pass>` | Operator login (never echoed to a buffer) |
+| `/switch <buffer>` | Jump to a buffer by substring |
+| `/server <id> <raw>` | Send a raw line to a specific connection |
+| `/raw <line>` | Send a raw line to the current connection |
+| `/quit [reason]` | Disconnect |
+| `/help` | List the above in the client |
 
+Commands that need a channel (`/part`, `/topic`, `/kick`, `/op`, …) use the
+active buffer, falling back to the connection's default channel when typed in
+Status. If neither is available they say so rather than sending a broken line.
 
-## Profiles + SASL (v0.5.0)
+## Profiles
 
-hexRust now supports saved connection profiles and optional SASL authentication (PLAIN).
+Stored at `~/.config/hexrust/profiles.toml`. Click **Profiles…** in the top
+bar to add, edit, or connect.
 
-Profiles are stored at:
+Both SASL and ZNC credentials live in that file **in plain text**, so treat it
+accordingly.
 
-- `~/.config/hexrust/profiles.toml` (on Fedora/Linux)
+### SASL
 
-### Using Profiles
+Fill `sasl_username` and `sasl_password` and hexrust negotiates CAP and
+authenticates on connect. Only the PLAIN mechanism is supported. If the server
+does not offer SASL, or refuses it, the client says so and continues
+unauthenticated rather than stalling.
 
-- Click **Profiles…** in the top bar
-- Add or edit profiles
-- Select a profile and click **Connect**
+### ZNC
 
-### SASL Notes
+Profiles can hold a ZNC username, network, and password. These are combined
+into the IRC `PASS` string ZNC expects:
 
-- SASL is optional. If you fill `sasl_username` and `sasl_password`, hexRust will attempt CAP/SASL auth on connect.
-- Currently supported mechanism: **PLAIN**
-- Passwords are stored in plain text in `profiles.toml`. Use at your own risk.
+- `username:password` when no network is set
+- `username/network:password` when one is
 
-## v0.5.0 fix
-- Fixed GTK closure ownership/lifetime issues in the Profiles manager.
+See <https://wiki.znc.in/Connecting_to_ZNC>.
 
+## Logs
 
-## ZNC support (v0.5.0)
+Per-buffer logs are written to
+`~/.local/share/hexrust/logs/<server>/<buffer>.log`.
 
-Profiles can now store ZNC login parts:
+- **Find** (or Ctrl+F) with **Find Next** steps through matches in the buffer
+- **Load Log** replaces the buffer view with the on-disk log, which is how you
+  read back history from before a restart
 
-- ZNC username
-- ZNC network (optional)
-- ZNC server password
+## Tests
 
-hexRust will automatically build an IRC PASS string:
+```bash
+cargo test                                        # offline, deterministic
+cargo test --test live_connect -- --ignored       # connects to Libera.Chat
+```
 
-- `username:password` (if network is empty)
-- `username/network:password` (if network is set)
-
-This matches common ZNC client login formats. See: https://wiki.znc.in/Connecting_to_ZNC
-
-## v0.5.0
-- Profiles UI: Regular and ZNC profiles are shown in separate tabs.
-- Fixed Save button: errors are now surfaced and saves are not silently ignored.
-
-## v0.5.0
-- Fixed missing GTK import for Frame in Profiles UI.
-
-## v0.5.0
-- Theme: enforced pure green (#00ff00) on black (#000000) everywhere, monospace 9pt.
-
-## v0.5.0
-- Theme: fixed GTK slider sizing warnings by setting explicit min sizes for scrollbar/scale sliders.
-
-
-## v0.5.0
-
-Major step: **persistent logs + buffer search**
-
-- Persistent per-buffer logs stored under:
-  - `~/.local/share/hexrust/logs/<server>/<buffer>.log`
-- **Find**: use the Find box (or Ctrl+F) and click **Find Next** to jump through matches.
-- **Load Log**: replaces the current buffer view with the on-disk log (useful after restarts).
-
-## v0.5.2
-- Fixed RefCell borrow lifetime issues in Find/Load Log helpers.
+The offline tests drive the client against a scripted local IRC server, so
+they cover registration, SASL, and message routing without a network. The live
+test skips itself if the network refuses the connection on policy grounds
+(some addresses are required to use SASL).
