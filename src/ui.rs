@@ -1172,6 +1172,26 @@ fn select_buffer(key: &BufferKey, notebook: &Notebook, tabs: &Rc<RefCell<HashMap
     }
 }
 
+/// Lines kept per buffer. Without a cap a long-running session grows its
+/// buffers without bound, which on a busy channel is a steady leak.
+pub const MAX_BUFFER_LINES: i32 = 5000;
+
+/// Drops the oldest lines until the buffer is within `max_lines`.
+pub fn trim_buffer(buffer: &TextBuffer, max_lines: i32) {
+    if max_lines <= 0 {
+        return;
+    }
+    // An empty buffer reports one line, and the trailing newline of the last
+    // message opens another, so compare against the real content length.
+    let excess = buffer.line_count() - 1 - max_lines;
+    if excess <= 0 {
+        return;
+    }
+    let mut start = buffer.start_iter();
+    let Some(mut cut) = buffer.iter_at_line(excess) else { return };
+    buffer.delete(&mut start, &mut cut);
+}
+
 fn append_to(key: &BufferKey, line: &str, tabs: &Rc<RefCell<HashMap<String, Tab>>>) {
     let k = key.as_string();
     let Some(tab) = tabs.borrow().get(&k).cloned() else { return };
@@ -1179,6 +1199,8 @@ fn append_to(key: &BufferKey, line: &str, tabs: &Rc<RefCell<HashMap<String, Tab>
     let mut end = tab.buffer.end_iter();
     tab.buffer.insert(&mut end, line);
     tab.buffer.insert(&mut end, "\n");
+
+    trim_buffer(&tab.buffer, MAX_BUFFER_LINES);
 
     let mut end2 = tab.buffer.end_iter();
     tab.view.scroll_to_iter(&mut end2, 0.0, false, 0.0, 0.0);

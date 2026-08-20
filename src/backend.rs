@@ -4,10 +4,18 @@ use crate::util::ts_prefix;
 
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Mutex;
+
+/// Longest gap between reconnection attempts. Attempts back off 1, 2, 4, 8,
+/// 16 seconds and then hold here, which is roughly two attempts a minute --
+/// persistent enough to recover unattended, sparse enough not to hammer a
+/// server that is refusing us.
+const MAX_RECONNECT_DELAY: u64 = 30;
 
 #[derive(Clone)]
 struct ConnHandle {
@@ -16,7 +24,14 @@ struct ConnHandle {
 
 #[derive(Clone)]
 struct BackendState {
+    /// Live connections. A connection is absent while it is waiting to
+    /// reconnect, so sends during that window are reported rather than
+    /// dropped into a channel nothing is reading.
     conns: Arc<Mutex<HashMap<u64, ConnHandle>>>,
+    /// Set when the user asked to disconnect. Kept separately from `conns`
+    /// because it has to outlive the connection itself: it is what stops the
+    /// reconnect loop, which runs precisely when there is no connection.
+    quits: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>,
 }
 
 pub fn start_backend(ui_tx: mpsc::Sender<UiEvent>) -> mpsc::Sender<BackendCmd> {
@@ -41,6 +56,7 @@ pub fn start_backend(ui_tx: mpsc::Sender<UiEvent>) -> mpsc::Sender<BackendCmd> {
 
             let state = BackendState {
                 conns: Arc::new(Mutex::new(HashMap::new())),
+                quits: Arc::new(Mutex::new(HashMap::new())),
             };
 
             while let Some(cmd) = tcmd_rx.recv().await {
@@ -80,7 +96,11 @@ async fn handle_cmd(cmd: BackendCmd, state: &BackendState, ui_tx: &mpsc::Sender<
             }
         }
         BackendCmd::Disconnect { conn_id, reason } => {
-            // Best-effort: send QUIT and drop the sender handle.
+            // Mark the intent first: the reconnect loop checks this as soon as
+            // the connection ends, so it must be set before we cause the end.
+            if let Some(flag) = state.quits.lock().await.get(&conn_id) {
+                flag.store(true, Ordering::SeqCst);
+            }
             let mut conns = state.conns.lock().await;
             if let Some(h) = conns.remove(&conn_id) {
                 let _ = h.raw_tx.send(format!("QUIT :{reason}"));
@@ -92,14 +112,8 @@ async fn handle_cmd(cmd: BackendCmd, state: &BackendState, ui_tx: &mpsc::Sender<
 }
 
 async fn connect(conn_id: u64, cfg: IrcConfig, state: &BackendState, ui_tx: &mpsc::Sender<UiEvent>) -> Result<()> {
-    // Create a per-connection raw channel.
-    let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-    // Store handle early so UI can send immediately.
-    {
-        let mut conns = state.conns.lock().await;
-        conns.insert(conn_id, ConnHandle { raw_tx: raw_tx.clone() });
-    }
+    let quit = Arc::new(AtomicBool::new(false));
+    state.quits.lock().await.insert(conn_id, quit.clone());
 
     let _ = ui_tx.send(UiEvent::ConnectionUp {
         conn_id,
@@ -109,14 +123,84 @@ async fn connect(conn_id: u64, cfg: IrcConfig, state: &BackendState, ui_tx: &mps
     });
 
     let ui_tx_task = ui_tx.clone();
+    let conns = state.conns.clone();
+    let quits = state.quits.clone();
+
     tokio::spawn(async move {
-        if let Err(e) = irc::irc_run(conn_id, cfg, ui_tx_task.clone(), raw_rx, raw_tx.clone()).await {
+        let mut attempt: u32 = 0;
+
+        loop {
+            // A fresh channel per attempt: the previous receiver was consumed
+            // by the run that just ended.
+            let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            conns
+                .lock()
+                .await
+                .insert(conn_id, ConnHandle { raw_tx: raw_tx.clone() });
+
+            let result = irc::irc_run(
+                conn_id,
+                cfg.clone(),
+                ui_tx_task.clone(),
+                raw_rx,
+                raw_tx.clone(),
+            )
+            .await;
+
+            // Not connected from here until the next attempt succeeds.
+            conns.lock().await.remove(&conn_id);
+
+            if quit.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // A clean end of stream is a disconnect too. Reporting only the
+            // error case left the UI believing it was still connected.
+            let reason = match result {
+                Ok(()) => "connection closed by server".to_string(),
+                Err(e) => format!("{e:#}"),
+            };
             let _ = ui_tx_task.send(UiEvent::ConnectionDown {
                 conn_id,
-                reason: format!("{e:#}"),
+                reason: reason.clone(),
             });
+
+            attempt += 1;
+            let delay = reconnect_delay(attempt);
+            let _ = ui_tx_task.send(UiEvent::Append {
+                conn_id,
+                buffer: "Status".to_string(),
+                line: format!(
+                    "{} *** {reason}. Reconnecting in {delay}s (attempt {attempt})…",
+                    ts_prefix()
+                ),
+                bump_unread: true,
+                bump_highlight: false,
+            });
+
+            // Wake early if the user disconnects while we are waiting, rather
+            // than making them sit out the whole backoff.
+            let mut waited = 0;
+            while waited < delay {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if quit.load(Ordering::SeqCst) {
+                    break;
+                }
+                waited += 1;
+            }
+            if quit.load(Ordering::SeqCst) {
+                break;
+            }
         }
+
+        quits.lock().await.remove(&conn_id);
     });
 
     Ok(())
+}
+
+/// Seconds to wait before attempt `n`: 1, 2, 4, 8, 16, then held at the cap.
+fn reconnect_delay(attempt: u32) -> u64 {
+    let shift = attempt.saturating_sub(1).min(16);
+    (1u64 << shift).min(MAX_RECONNECT_DELAY)
 }

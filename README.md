@@ -11,6 +11,7 @@ A multi-server IRC client in Rust and GTK4.
 - Tab completion for nicks and commands, and a right-click menu on the user list
 - Inline formatting and colour codes stripped for readability
 - Answers CTCP VERSION, PING, TIME and CLIENTINFO
+- Automatic reconnection with backoff after a dropped connection
 - Persistent per-buffer logs, plus in-buffer search
 - TRON theme: cyan on black, amber for the active tab
 
@@ -113,6 +114,16 @@ into the IRC `PASS` string ZNC expects:
 
 See <https://wiki.znc.in/Connecting_to_ZNC>.
 
+## Reconnection
+
+A connection that drops is retried automatically, backing off 1, 2, 4, 8, 16
+seconds and then every 30 — persistent enough to recover unattended, sparse
+enough not to hammer a server that is refusing the connection. Each attempt is
+reported in the Status buffer.
+
+Disconnecting on purpose is never retried, and asking to disconnect while a
+retry is pending cancels it rather than waiting out the backoff.
+
 ## Logs
 
 Per-buffer logs are written to
@@ -121,6 +132,10 @@ Per-buffer logs are written to
 - **Find** (or Ctrl+F) with **Find Next** steps through matches in the buffer
 - **Load Log** replaces the buffer view with the on-disk log, which is how you
   read back history from before a restart
+
+Buffers keep the most recent 5000 lines in memory so a long session does not
+grow without bound. Trimming only affects the view: everything is already on
+disk, so **Load Log** still shows the full history.
 
 ## Tests
 
