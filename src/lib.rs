@@ -9,3 +9,4 @@ pub mod profiles;
 pub mod logging;
 pub mod commands;
 pub mod complete;
+pub mod format;

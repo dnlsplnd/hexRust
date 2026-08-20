@@ -214,3 +214,201 @@ async fn topic_changes_are_attributed() {
         "topic change not attributed: {lines:?}"
     );
 }
+
+
+/// Formatting codes must not reach the buffer.
+#[tokio::test(flavor = "multi_thread")]
+async fn inline_formatting_is_stripped_from_messages() {
+    let (port, _log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG #c :\u{3}04,00\u{2}RED\u{2}\u{3} plain".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    let msg = lines
+        .iter()
+        .find(|l| l.contains("<alice>"))
+        .unwrap_or_else(|| panic!("message never arrived: {lines:?}"));
+
+    assert!(msg.ends_with("RED plain"), "codes not stripped: {msg:?}");
+    assert!(
+        !msg.chars().any(|c| c.is_control()),
+        "control characters reached the buffer: {msg:?}"
+    );
+}
+
+/// A highlight must still fire when the nick is wrapped in colour codes.
+#[tokio::test(flavor = "multi_thread")]
+async fn highlights_survive_formatting_codes() {
+    let (port, _log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG #c :\u{3}04n\u{3}: ping".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    assert!(
+        lines.iter().any(|l| l.contains("<alice>") && l.contains("n: ping")),
+        "formatted highlight not rendered: {lines:?}"
+    );
+}
+
+/// A direct CTCP VERSION should be answered, and shown as a request rather
+/// than as the raw delimited payload.
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_ctcp_version_is_answered() {
+    let (port, log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG n :\u{1}VERSION\u{1}".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    let sent = log.lock().unwrap().clone();
+
+    assert!(
+        sent.iter().any(|l| l.starts_with("NOTICE alice :\u{1}VERSION hexrust")),
+        "no CTCP VERSION reply: {sent:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("CTCP VERSION from alice")),
+        "request not reported: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("<alice>")),
+        "CTCP leaked into the buffer as chat: {lines:?}"
+    );
+}
+
+/// PING must echo its argument, or the sender cannot measure the round trip.
+#[tokio::test(flavor = "multi_thread")]
+async fn ctcp_ping_echoes_its_argument() {
+    let (port, log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG n :\u{1}PING 1234567\u{1}".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    drive(cfg(port, "n"), 4).await;
+    let sent = log.lock().unwrap().clone();
+    assert!(
+        sent.iter().any(|l| l == "NOTICE alice :\u{1}PING 1234567\u{1}"),
+        "ping argument not echoed: {sent:?}"
+    );
+}
+
+/// Answering a channel-wide CTCP would flood the channel with one notice per
+/// client, so it must be reported but not answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn channel_ctcp_is_not_answered() {
+    let (port, log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG #c :\u{1}VERSION\u{1}".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    let sent = log.lock().unwrap().clone();
+
+    assert!(
+        !sent.iter().any(|l| l.starts_with("NOTICE")),
+        "answered a channel-wide CTCP: {sent:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("CTCP VERSION from alice")),
+        "channel CTCP not reported: {lines:?}"
+    );
+}
+
+/// An unknown CTCP is reported but must not be answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_ctcp_gets_no_reply() {
+    let (port, log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG n :\u{1}NONSENSE\u{1}".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    let sent = log.lock().unwrap().clone();
+    assert!(!sent.iter().any(|l| l.starts_with("NOTICE")), "replied to unknown CTCP: {sent:?}");
+    assert!(lines.iter().any(|l| l.contains("CTCP NONSENSE from alice")));
+}
+
+/// ACTION is CTCP too, but it is chat and must keep rendering as an action.
+#[tokio::test(flavor = "multi_thread")]
+async fn action_is_still_rendered_as_an_action() {
+    let (port, log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h PRIVMSG #c :\u{1}ACTION waves\u{1}".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    let sent = log.lock().unwrap().clone();
+
+    assert!(
+        lines.iter().any(|l| l.contains("* alice waves")),
+        "action not rendered: {lines:?}"
+    );
+    assert!(!sent.iter().any(|l| l.starts_with("NOTICE")), "answered an ACTION: {sent:?}");
+}
+
+/// A CTCP reply to something we sent should read as a reply.
+#[tokio::test(flavor = "multi_thread")]
+async fn ctcp_replies_are_labelled() {
+    let (port, _log) = mock_server(|line| {
+        if line.starts_with("USER ") {
+            return vec![
+                ":srv 001 n :Welcome".into(),
+                ":alice!u@h NOTICE n :\u{1}VERSION SomeClient 1.0\u{1}".into(),
+            ];
+        }
+        vec![]
+    })
+    .await;
+
+    let lines = drive(cfg(port, "n"), 4).await;
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("CTCP reply from alice: VERSION SomeClient 1.0")),
+        "reply not labelled: {lines:?}"
+    );
+}

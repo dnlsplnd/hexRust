@@ -1,4 +1,5 @@
 use crate::model::{IrcConfig, UiEvent};
+use crate::format::strip_formatting;
 use crate::util::{contains_nick_word, ts_prefix};
 
 use anyhow::{Context, Result};
@@ -280,7 +281,7 @@ pub async fn irc_run(
             continue;
         }
 
-        route_irc_line(conn_id, &line, &mut my_nick_net, &ui_tx);
+        route_irc_line(conn_id, &line, &mut my_nick_net, &ui_tx, &raw_tx);
     }
 
     drop(raw_tx);
@@ -325,7 +326,13 @@ async fn read_one_line<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mpsc::Sender<UiEvent>) {
+fn route_irc_line(
+    conn_id: u64,
+    line: &str,
+    my_nick_net: &mut String,
+    ui_tx: &mpsc::Sender<UiEvent>,
+    raw_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+) {
     // Numeric NAMES reply: 353
     if let Some((chan, users)) = parse_names_reply(line) {
         let _ = ui_tx.send(UiEvent::SetUsers {
@@ -346,7 +353,7 @@ fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mp
         let _ = ui_tx.send(UiEvent::Append {
             conn_id,
             buffer: chan.to_string(),
-            line: format!("{} *** topic: {}", ts_prefix(), topic),
+            line: format!("{} *** topic: {}", ts_prefix(), strip_formatting(&topic)),
             bump_unread: true,
             bump_highlight: false,
         });
@@ -401,14 +408,43 @@ fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mp
                 make_current: false,
             });
 
+            // A CTCP request that is not an ACTION gets answered rather than
+            // shown as the raw \x01-delimited payload it arrives as.
+            if !is_ctcp_action(&text) {
+                if let Some((cmd, arg)) = parse_ctcp(&text) {
+                    // Only answer direct requests. Replying to a channel-wide
+                    // CTCP would flood the channel with one notice per client.
+                    if !is_channel {
+                        if let Some(payload) = ctcp_reply(&cmd, &arg) {
+                            let _ = raw_tx
+                                .send(format!("NOTICE {nick} :\u{0001}{payload}\u{0001}"));
+                        }
+                    }
+                    let _ = ui_tx.send(UiEvent::Append {
+                        conn_id,
+                        buffer: "Status".to_string(),
+                        line: format!("{} *** CTCP {} from {}", ts_prefix(), cmd, nick),
+                        bump_unread: true,
+                        bump_highlight: false,
+                    });
+                    return;
+                }
+            }
+
             let is_action = is_ctcp_action(&text);
             let rendered = if is_action {
-                format!("{} * {} {}", ts_prefix(), nick, parse_ctcp_action(&text))
+                format!(
+                    "{} * {} {}",
+                    ts_prefix(),
+                    nick,
+                    strip_formatting(&parse_ctcp_action(&text))
+                )
             } else {
-                format!("{} <{}> {}", ts_prefix(), nick, text)
+                format!("{} <{}> {}", ts_prefix(), nick, strip_formatting(&text))
             };
 
-            let is_highlight = (!is_channel) || contains_nick_word(&text, my_nick_net);
+            let is_highlight =
+                (!is_channel) || contains_nick_word(&strip_formatting(&text), my_nick_net);
 
             let _ = ui_tx.send(UiEvent::Append {
                 conn_id,
@@ -438,10 +474,21 @@ fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mp
                 buffer: buffer.clone(),
                 make_current: false,
             });
+            // A notice wrapped in \x01 is the answer to a CTCP we sent.
+            let rendered = match parse_ctcp(&text) {
+                Some((cmd, arg)) if arg.is_empty() => {
+                    format!("{} *** CTCP reply from {}: {}", ts_prefix(), nick, cmd)
+                }
+                Some((cmd, arg)) => {
+                    format!("{} *** CTCP reply from {}: {} {}", ts_prefix(), nick, cmd, arg)
+                }
+                None => format!("{} -{}- {}", ts_prefix(), nick, strip_formatting(&text)),
+            };
+
             let _ = ui_tx.send(UiEvent::Append {
                 conn_id,
                 buffer,
-                line: format!("{} -{}- {}", ts_prefix(), nick, text),
+                line: rendered,
                 bump_unread: true,
                 bump_highlight: false,
             });
@@ -453,7 +500,12 @@ fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mp
             let _ = ui_tx.send(UiEvent::Append {
                 conn_id,
                 buffer: chan.to_string(),
-                line: format!("{} *** {} changed the topic to: {}", ts_prefix(), nick, topic),
+                line: format!(
+                    "{} *** {} changed the topic to: {}",
+                    ts_prefix(),
+                    nick,
+                    strip_formatting(&topic)
+                ),
                 bump_unread: true,
                 bump_highlight: false,
             });
@@ -634,6 +686,44 @@ fn parse_topic_332(line: &str) -> Option<(&str, String)> {
         return Some((chan, topic));
     }
     None
+}
+
+/// Splits a CTCP payload into its command and argument.
+///
+/// CTCP is carried inside \x01 delimiters within an ordinary PRIVMSG or
+/// NOTICE. Returns None for text that is not CTCP.
+fn parse_ctcp(text: &str) -> Option<(String, String)> {
+    let inner = text.strip_prefix('\u{0001}')?;
+    let inner = inner.strip_suffix('\u{0001}').unwrap_or(inner);
+    if inner.is_empty() {
+        return None;
+    }
+    let (cmd, arg) = match inner.split_once(' ') {
+        Some((c, a)) => (c, a),
+        None => (inner, ""),
+    };
+    Some((cmd.to_uppercase(), arg.to_string()))
+}
+
+/// The payload to answer a CTCP request with, or None to stay silent.
+fn ctcp_reply(cmd: &str, arg: &str) -> Option<String> {
+    match cmd {
+        "VERSION" => Some(format!("VERSION hexrust {}", env!("CARGO_PKG_VERSION"))),
+        // The argument is echoed unchanged; it is the sender's timestamp and
+        // is what lets them measure the round trip.
+        "PING" => Some(format!("PING {arg}")),
+        "TIME" => Some(format!("TIME {}", local_time_string())),
+        "CLIENTINFO" => Some("CLIENTINFO ACTION CLIENTINFO PING TIME VERSION".to_string()),
+        _ => None,
+    }
+}
+
+fn local_time_string() -> String {
+    use time::format_description;
+    let fmt = format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")
+        .expect("static format");
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    now.format(&fmt).unwrap_or_else(|_| "unknown".to_string())
 }
 
 fn is_ctcp_action(text: &str) -> bool {

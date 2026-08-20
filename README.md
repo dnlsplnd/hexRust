@@ -9,6 +9,8 @@ A multi-server IRC client in Rust and GTK4.
 - Command palette (Ctrl+P) for quick `connect` / `join` / `switch` / `raw`
 - Saved connection profiles, with SASL (PLAIN) and ZNC support
 - Tab completion for nicks and commands, and a right-click menu on the user list
+- Inline formatting and colour codes stripped for readability
+- Answers CTCP VERSION, PING, TIME and CLIENTINFO
 - Persistent per-buffer logs, plus in-buffer search
 - TRON theme: cyan on black, amber for the active tab
 
@@ -75,6 +77,16 @@ fresh completion rather than continuing the old cycle.
 Right-click a nick in the user list for Whois, Query, Op, Deop, Voice,
 Devoice, Kick and Ban. Each entry runs the same command the keyboard would, so
 there is one implementation behind both.
+
+## CTCP
+
+Direct CTCP requests are answered automatically: `VERSION`, `PING` (echoing
+the sender's token so they can measure the round trip), `TIME`, and
+`CLIENTINFO`. Anything else is reported but not answered.
+
+Channel-wide CTCP is reported and deliberately **not** answered, since one
+notice per client would flood the channel. `ACTION` remains chat and is
+rendered as `* nick does something`.
 
 ## Profiles
 
