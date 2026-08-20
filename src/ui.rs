@@ -833,10 +833,14 @@ pub fn build_ui(app: &Application) {
                         // Normalize: remove any existing variants of this nick with status prefixes.
                         let key = chan_users_key(conn_id, &channel);
                         let disp = crate::util::nick_display(&nick).to_string();
-                        let mut users_mut = users.borrow_mut();
-                        let set = users_mut.entry(key).or_default();
-                        set.retain(|x| crate::util::nick_display(x) != disp);
-                        set.insert(nick);
+                        // The mutable borrow must end before refresh_user_list,
+                        // which borrows `users` again to read it.
+                        {
+                            let mut users_mut = users.borrow_mut();
+                            let set = users_mut.entry(key).or_default();
+                            set.retain(|x| crate::util::nick_display(x) != disp);
+                            set.insert(nick);
+                        }
                         refresh_user_list(
                             &users_list,
                             &users_title,
@@ -845,12 +849,12 @@ pub fn build_ui(app: &Application) {
                         );
                     }
                     UiEvent::RemoveUser { conn_id, channel, nick } => {
-                        if let Some(set) = users
-                            .borrow_mut()
-                            .get_mut(&chan_users_key(conn_id, &channel))
                         {
-                            let disp = crate::util::nick_display(&nick).to_string();
-                            set.retain(|x| crate::util::nick_display(x) != disp);
+                            let mut users_mut = users.borrow_mut();
+                            if let Some(set) = users_mut.get_mut(&chan_users_key(conn_id, &channel)) {
+                                let disp = crate::util::nick_display(&nick).to_string();
+                                set.retain(|x| crate::util::nick_display(x) != disp);
+                            }
                         }
                         refresh_user_list(
                             &users_list,
@@ -860,9 +864,12 @@ pub fn build_ui(app: &Application) {
                         );
                     }
                     UiEvent::RemoveUserEverywhere { conn_id, nick } => {
-                        for (k, set) in users.borrow_mut().iter_mut() {
-                            if k.starts_with(&format!("{conn_id}|")) {
-                                set.remove(&nick);
+                        {
+                            let mut users_mut = users.borrow_mut();
+                            for (k, set) in users_mut.iter_mut() {
+                                if k.starts_with(&format!("{conn_id}|")) {
+                                    set.remove(&nick);
+                                }
                             }
                         }
                         refresh_user_list(
@@ -873,8 +880,12 @@ pub fn build_ui(app: &Application) {
                         );
                     }
                     UiEvent::RenameUserEverywhere { conn_id, old, new_ } => {
-                        for (k, set) in users.borrow_mut().iter_mut() {
-                            if k.starts_with(&format!("{conn_id}|")) {
+                        {
+                            let mut users_mut = users.borrow_mut();
+                            for (k, set) in users_mut.iter_mut() {
+                                if !k.starts_with(&format!("{conn_id}|")) {
+                                    continue;
+                                }
                                 let old_disp = crate::util::nick_display(&old).to_string();
                                 let mut removed = false;
                                 set.retain(|x| {
