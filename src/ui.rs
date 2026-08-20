@@ -333,10 +333,13 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Input history: Up/Down arrows.
+    // Input history (Up/Down) and nick/command completion (Tab).
     {
         let hist = history.clone();
         let entry = input_entry.clone();
+        let users = users.clone();
+        let current_buf = current_buf.clone();
+        let cycle: Rc<RefCell<crate::complete::TabCycle>> = Rc::new(RefCell::new(Default::default()));
 
         let controller = gtk::EventControllerKey::new();
         controller.connect_key_pressed(move |_c, key, _code, _state| {
@@ -348,9 +351,143 @@ pub fn build_ui(app: &Application) {
                 history_down(&entry, &hist);
                 return glib::Propagation::Stop;
             }
+            if key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab {
+                let active = current_buf.borrow().clone();
+                let candidates: Vec<String> = users
+                    .borrow()
+                    .get(&chan_users_key(active.conn_id, &active.name))
+                    .map(|s| s.iter().cloned().collect())
+                    .unwrap_or_default();
+
+                let text = entry.text().to_string();
+                let pos = entry.position();
+                // A negative position means "at the end" in GTK.
+                let cursor = if pos < 0 { text.chars().count() } else { pos as usize };
+
+                if let Some(done) = cycle.borrow_mut().advance(&text, cursor, &candidates) {
+                    entry.set_text(&done.text);
+                    entry.set_position(done.cursor as i32);
+                }
+                // Swallow Tab either way, so it never moves focus out of the
+                // entry mid-message.
+                return glib::Propagation::Stop;
+            }
             glib::Propagation::Proceed
         });
         input_entry.add_controller(controller);
+    }
+
+    // Right-click menu on the user list.
+    {
+        let users_list_c = users_list.clone();
+        let backend_tx = backend_tx.clone();
+        let conn_meta = conn_meta.clone();
+        let notebook = notebook.clone();
+        let tabs = tabs.clone();
+        let page_to_buf = page_to_buf.clone();
+        let unread = unread.clone();
+        let highlights = highlights.clone();
+        let sidebar_items = sidebar_items.clone();
+        let sidebar_list = sidebar_list.clone();
+        let current_buf = current_buf.clone();
+
+        // One popover, re-populated per click; parented once as GTK requires.
+        let menu = gtk::Popover::new();
+        menu.set_parent(&users_list);
+        menu.set_position(gtk::PositionType::Left);
+        menu.set_autohide(true);
+
+        // The popup body is a named closure rather than a gesture callback so
+        // it can be invoked directly, which is what makes it testable at all.
+        let show_menu: Rc<dyn Fn(f64, f64)> = Rc::new(move |x: f64, y: f64| {
+            let Some(row) = users_list_c.row_at_y(y as i32) else { return };
+            let Some(label) = row.child().and_then(|c| c.downcast::<Label>().ok()) else { return };
+            // The row shows the status prefix for context; the nick is the rest.
+            let nick = crate::util::nick_display(&label.label()).to_string();
+            if nick.is_empty() {
+                return;
+            }
+
+            let vbox = gtk::Box::new(Orientation::Vertical, 0);
+            let header = Label::new(Some(&nick));
+            header.set_xalign(0.0);
+            header.set_margin_start(8);
+            header.set_margin_end(8);
+            header.set_margin_top(4);
+            header.set_margin_bottom(4);
+            vbox.append(&header);
+            vbox.append(&gtk::Separator::new(Orientation::Horizontal));
+
+            // Each entry is the command line it would type, so the menu and
+            // the keyboard go through exactly one implementation.
+            let items: &[(&str, String)] = &[
+                ("Whois", format!("whois {nick}")),
+                ("Query", format!("query {nick}")),
+                ("__sep", String::new()),
+                ("Op", format!("op {nick}")),
+                ("Deop", format!("deop {nick}")),
+                ("Voice", format!("voice {nick}")),
+                ("Devoice", format!("devoice {nick}")),
+                ("__sep", String::new()),
+                ("Kick", format!("kick {nick}")),
+                ("Ban", format!("ban {nick}")),
+            ];
+
+            for (label_text, cmdline) in items {
+                if *label_text == "__sep" {
+                    vbox.append(&gtk::Separator::new(Orientation::Horizontal));
+                    continue;
+                }
+                let btn = Button::with_label(label_text);
+                btn.set_has_frame(false);
+
+                let cmdline = cmdline.clone();
+                let menu_c = menu.clone();
+                let backend_tx = backend_tx.clone();
+                let conn_meta = conn_meta.clone();
+                let notebook = notebook.clone();
+                let tabs = tabs.clone();
+                let page_to_buf = page_to_buf.clone();
+                let unread = unread.clone();
+                let highlights = highlights.clone();
+                let sidebar_items = sidebar_items.clone();
+                let sidebar_list = sidebar_list.clone();
+                let current_buf = current_buf.clone();
+
+                btn.connect_clicked(move |_| {
+                    menu_c.popdown();
+                    let Some(tx) = backend_tx.borrow().clone() else { return };
+                    let key = current_buf.borrow().clone();
+                    if key.conn_id == 0 {
+                        return;
+                    }
+                    handle_slash_command(
+                        &tx,
+                        &key,
+                        &cmdline,
+                        &conn_meta,
+                        &notebook,
+                        &tabs,
+                        &page_to_buf,
+                        &unread,
+                        &highlights,
+                        &sidebar_items,
+                        &sidebar_list,
+                    );
+                });
+                vbox.append(&btn);
+            }
+
+            menu.set_child(Some(&vbox));
+            menu.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            menu.popup();
+        });
+
+        let show = show_menu.clone();
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(gdk::BUTTON_SECONDARY);
+        gesture.connect_pressed(move |_g, _n, x, y| show(x, y));
+        users_list.add_controller(gesture);
     }
 
     // Command palette (Ctrl+P) + button.
@@ -1586,8 +1723,16 @@ fn refresh_user_list(
     active: &BufferKey,
     users: &HashMap<String, BTreeSet<String>>,
 ) {
-    while let Some(child) = users_list.first_child() {
-        users_list.remove(&child);
+    // Only rows: a ListBox can also hold non-row children (the right-click
+    // popover is parented here), and ListBox::remove cannot remove those, so
+    // a blind first_child/remove loop would never terminate.
+    let mut child = users_list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<ListBoxRow>() {
+            users_list.remove(&row);
+        }
+        child = next;
     }
 
     if active.conn_id == 0 || !active.name.starts_with('#') {

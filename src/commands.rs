@@ -334,3 +334,15 @@ pub fn needs_channel(cmd: &str) -> bool {
             | "unban"
     )
 }
+
+/// Every command the client understands, for tab completion and /help.
+///
+/// Kept next to `plan` so a command added there is offered here too. The
+/// entries handled in `ui.rs` are listed as well, since completion should not
+/// care which module implements a command.
+pub const COMMANDS: &[&str] = &[
+    "away", "back", "ban", "ctcp", "dehalfop", "deop", "devoice", "halfop", "help", "invite",
+    "join", "kick", "leave", "list", "me", "mode", "motd", "msg", "names", "nick", "notice",
+    "op", "oper", "part", "ping", "query", "quit", "raw", "server", "switch", "topic", "unban",
+    "version", "voice", "whois", "whowas",
+];

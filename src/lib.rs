@@ -8,3 +8,4 @@ pub mod util;
 pub mod profiles;
 pub mod logging;
 pub mod commands;
+pub mod complete;

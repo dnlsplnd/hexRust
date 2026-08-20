@@ -8,6 +8,7 @@ A multi-server IRC client in Rust and GTK4.
 - Highlights on your nick and on any direct message
 - Command palette (Ctrl+P) for quick `connect` / `join` / `switch` / `raw`
 - Saved connection profiles, with SASL (PLAIN) and ZNC support
+- Tab completion for nicks and commands, and a right-click menu on the user list
 - Persistent per-buffer logs, plus in-buffer search
 - TRON theme: cyan on black, amber for the active tab
 
@@ -58,6 +59,22 @@ works without hexrust needing to know the command.
 Commands that need a channel (`/part`, `/topic`, `/kick`, `/op`, …) use the
 active buffer, falling back to the connection's default channel when typed in
 Status. If neither is available they say so rather than sending a broken line.
+
+## Tab completion
+
+Tab completes the word before the cursor. A nick opening the line is completed
+as `nick: `, matching what other clients and most highlight rules expect;
+anywhere else it gets a plain space. A word starting with `/` at the very
+start of the line completes against the command list instead.
+
+Press Tab again to cycle through the candidates. Typing anything starts a
+fresh completion rather than continuing the old cycle.
+
+## User list menu
+
+Right-click a nick in the user list for Whois, Query, Op, Deop, Voice,
+Devoice, Kick and Ban. Each entry runs the same command the keyboard would, so
+there is one implementation behind both.
 
 ## Profiles
 
