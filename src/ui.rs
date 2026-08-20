@@ -1210,7 +1210,84 @@ fn handle_slash_command(
             let _ = tx.send(BackendCmd::SendRaw { conn_id: id, line: raw.clone() });
             append_to(current, &format!("{} => (server {id}) {raw}", ts_prefix()), tabs);
         }
+        "query" => {
+            if a1.is_empty() {
+                append_to(current, &format!("{} *** Usage: /query <nick>", ts_prefix()), tabs);
+                return;
+            }
+            // Open (or focus) a PM buffer without sending anything yet.
+            let key = BufferKey::new(current.conn_id, a1.clone());
+            let display = display_for_buffer(&key, &conn_meta.borrow());
+            ensure_buffer(
+                key.clone(),
+                display.clone(),
+                true,
+                notebook,
+                tabs,
+                page_to_buf,
+                unread,
+                highlights,
+            );
+            add_sidebar_buffer(&key, &display, sidebar_items, sidebar_list, &conn_meta.borrow());
+            select_buffer(&key, notebook, tabs);
+
+            // A trailing message is sent immediately, like /msg.
+            if !a2.is_empty() {
+                let _ = tx.send(BackendCmd::SendRaw {
+                    conn_id: current.conn_id,
+                    line: format!("PRIVMSG {a1} :{a2}"),
+                });
+                let nick = conn_meta
+                    .borrow()
+                    .get(&current.conn_id)
+                    .map(|m| m.nick.clone())
+                    .unwrap_or_else(|| "me".to_string());
+                append_to(&key, &format!("{} <{}> {}", ts_prefix(), nick, a2), tabs);
+            }
+        }
         _ => {
+            // Server-only commands live in commands.rs so they stay testable.
+            let meta_target = conn_meta
+                .borrow()
+                .get(&current.conn_id)
+                .map(|m| m.default_target.clone())
+                .unwrap_or_default();
+            let ctx = crate::commands::Ctx {
+                current_buffer: &current.name,
+                default_target: &meta_target,
+            };
+            let args = cmdline.split_once(' ').map(|(_, r)| r).unwrap_or("");
+
+            if let Some(outs) = crate::commands::plan(&cmd, args, &ctx) {
+                for out in outs {
+                    match out {
+                        crate::commands::Out::Raw(line) => {
+                            let _ = tx.send(BackendCmd::SendRaw {
+                                conn_id: current.conn_id,
+                                line,
+                            });
+                        }
+                        crate::commands::Out::Info(text) => {
+                            append_to(current, &format!("{} {text}", ts_prefix()), tabs);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // plan() returning None means either an unknown command, or one
+            // that needs a channel and was typed outside of any. Commands it
+            // owns are known, so tell the user rather than sending junk.
+            if crate::commands::needs_channel(&cmd) {
+                append_to(
+                    current,
+                    &format!("{} *** /{cmd} needs a channel; use it in a channel buffer", ts_prefix()),
+                    tabs,
+                );
+                return;
+            }
+
+            // Anything else is passed through, so /FOO reaches the server.
             let raw = cmdline.trim().to_string();
             let _ = tx.send(BackendCmd::SendRaw {
                 conn_id: current.conn_id,

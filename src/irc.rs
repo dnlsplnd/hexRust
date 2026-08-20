@@ -49,6 +49,47 @@ fn b64_encode(input: &[u8]) -> String {
     out
 }
 
+/// How many alternative nicks to try when the chosen one is taken.
+const MAX_NICK_ATTEMPTS: u8 = 3;
+
+/// Longest nick we will construct. RFC 1459 says 9; most modern servers allow
+/// more (Libera advertises 16). Staying at 16 avoids the server truncating a
+/// candidate into one we did not intend.
+const MAX_NICK_LEN: usize = 16;
+
+/// Next nick to try after a collision: append '_', or replace the tail once
+/// the limit is reached so we keep producing distinct candidates.
+fn next_nick(current: &str) -> String {
+    if current.chars().count() < MAX_NICK_LEN {
+        return format!("{current}_");
+    }
+    // At the limit: rotate a digit into the last position instead of growing.
+    let mut chars: Vec<char> = current.chars().collect();
+    let last = chars.len() - 1;
+    chars[last] = match chars[last] {
+        '0'..='8' => ((chars[last] as u8) + 1) as char,
+        _ => '0',
+    };
+    chars.into_iter().collect()
+}
+
+/// Strips the `:server 251 mynick` preamble from a numeric reply, leaving the
+/// human-readable remainder. Returns None if the line is not a numeric for us.
+fn strip_numeric_preamble(line: &str, my_nick: &str) -> Option<String> {
+    let rest = line.strip_prefix(':')?;
+    let (_server, rest) = rest.split_once(' ')?;
+    let (code, rest) = rest.split_once(' ')?;
+    if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // The first parameter of a numeric addressed to us is our own nick.
+    let rest = match rest.split_once(' ') {
+        Some((target, tail)) if target == my_nick || target == "*" => tail,
+        _ => rest,
+    };
+    Some(rest.strip_prefix(':').unwrap_or(rest).to_string())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaslState {
     Idle,
@@ -157,6 +198,7 @@ pub async fn irc_run(
     let mut buf = Vec::<u8>::with_capacity(4096);
     let mut welcomed = false;
     let mut my_nick_net = cfg.nick.clone();
+    let mut nick_attempts = 0u8;
 
     loop {
         buf.clear();
@@ -176,6 +218,39 @@ pub async fn irc_run(
         // Respond to PING quickly to stay connected.
         if let Some(rest) = line.strip_prefix("PING ") {
             let _ = raw_tx.send(format!("PONG {}", rest));
+            continue;
+        }
+
+        // 433: nick already in use. Before registration this is fatal if we
+        // ignore it -- the server will not complete registration and we would
+        // wait for a 001 that never arrives -- so try a variant instead.
+        if !welcomed && line.contains(" 433 ") {
+            nick_attempts += 1;
+            if nick_attempts <= MAX_NICK_ATTEMPTS {
+                let candidate = next_nick(&my_nick_net);
+                my_nick_net = candidate.clone();
+                let _ = raw_tx.send(format!("NICK {candidate}"));
+                let _ = ui_tx.send(UiEvent::SetMyNick { conn_id, nick: candidate.clone() });
+                ui_tx.send(UiEvent::Append {
+                    conn_id,
+                    buffer: status.clone(),
+                    line: format!("{} *** Nick in use, trying {}", ts_prefix(), candidate),
+                    bump_unread: true,
+                    bump_highlight: false,
+                }).ok();
+            } else {
+                ui_tx.send(UiEvent::Append {
+                    conn_id,
+                    buffer: status.clone(),
+                    line: format!(
+                        "{} *** Nick still in use after {} attempts. Use /nick to pick another.",
+                        ts_prefix(),
+                        MAX_NICK_ATTEMPTS
+                    ),
+                    bump_unread: true,
+                    bump_highlight: true,
+                }).ok();
+            }
             continue;
         }
 
@@ -345,6 +420,46 @@ fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mp
             return;
         }
 
+        // NOTICE: same routing as PRIVMSG but rendered differently, so it is
+        // not mistaken for channel chat.
+        if let Some((target, text)) = parse_notice(rest) {
+            let is_channel = target.starts_with('#');
+            // Server notices before registration are addressed to "*".
+            let buffer = if is_channel {
+                target.to_string()
+            } else if target == "*" || !prefix.contains('!') {
+                "Status".to_string()
+            } else {
+                nick.clone()
+            };
+
+            let _ = ui_tx.send(UiEvent::EnsureBuffer {
+                conn_id,
+                buffer: buffer.clone(),
+                make_current: false,
+            });
+            let _ = ui_tx.send(UiEvent::Append {
+                conn_id,
+                buffer,
+                line: format!("{} -{}- {}", ts_prefix(), nick, text),
+                bump_unread: true,
+                bump_highlight: false,
+            });
+            return;
+        }
+
+        // TOPIC changed by someone (the 332 numeric covers the join-time case).
+        if let Some((chan, topic)) = parse_topic_cmd(rest) {
+            let _ = ui_tx.send(UiEvent::Append {
+                conn_id,
+                buffer: chan.to_string(),
+                line: format!("{} *** {} changed the topic to: {}", ts_prefix(), nick, topic),
+                bump_unread: true,
+                bump_highlight: false,
+            });
+            return;
+        }
+
         // JOIN
         if let Some(chan) = parse_join(rest) {
             if chan.starts_with('#') {
@@ -421,11 +536,13 @@ fn route_irc_line(conn_id: u64, line: &str, my_nick_net: &mut String, ui_tx: &mp
         }
     }
 
-    // Default: put unparsed lines into Status.
+    // Default: Status. Numerics get their ":server 251 mynick" preamble
+    // stripped, which is all noise to the reader.
+    let shown = strip_numeric_preamble(line, my_nick_net).unwrap_or_else(|| line.to_string());
     let _ = ui_tx.send(UiEvent::Append {
         conn_id,
         buffer: "Status".to_string(),
-        line: format!("{} {}", ts_prefix(), line),
+        line: format!("{} {}", ts_prefix(), shown),
         bump_unread: true,
         bump_highlight: false,
     });
@@ -436,6 +553,20 @@ fn parse_privmsg(rest: &str) -> Option<(&str, String)> {
     let rest = rest.strip_prefix("PRIVMSG ")?;
     let (target, text) = rest.split_once(" :")?;
     Some((target.trim(), text.to_string()))
+}
+
+fn parse_notice(rest: &str) -> Option<(&str, String)> {
+    // NOTICE <target> :<text>
+    let rest = rest.strip_prefix("NOTICE ")?;
+    let (target, text) = rest.split_once(" :")?;
+    Some((target.trim(), text.to_string()))
+}
+
+fn parse_topic_cmd(rest: &str) -> Option<(&str, String)> {
+    // TOPIC #chan :new topic
+    let rest = rest.strip_prefix("TOPIC ")?;
+    let (chan, topic) = rest.split_once(" :")?;
+    Some((chan.trim(), topic.to_string()))
 }
 
 fn parse_join(rest: &str) -> Option<&str> {

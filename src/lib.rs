@@ -7,3 +7,4 @@ pub mod ui;
 pub mod util;
 pub mod profiles;
 pub mod logging;
+pub mod commands;
