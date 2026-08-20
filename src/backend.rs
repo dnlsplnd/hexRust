@@ -200,7 +200,10 @@ async fn connect(conn_id: u64, cfg: IrcConfig, state: &BackendState, ui_tx: &mps
 }
 
 /// Seconds to wait before attempt `n`: 1, 2, 4, 8, 16, then held at the cap.
-fn reconnect_delay(attempt: u32) -> u64 {
+///
+/// Public so the backoff policy can be asserted directly, rather than
+/// inferred from wall-clock timing in an integration test.
+pub fn reconnect_delay(attempt: u32) -> u64 {
     let shift = attempt.saturating_sub(1).min(16);
     (1u64 << shift).min(MAX_RECONNECT_DELAY)
 }

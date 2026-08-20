@@ -49,7 +49,7 @@ pub fn strip_formatting(s: &str) -> String {
             // Hex colour: six hex digits, optionally a comma and six more.
             '\u{0004}' => {
                 i += 1;
-                let mut take_hex = |i: &mut usize| {
+                let take_hex = |i: &mut usize| {
                     let mut n = 0;
                     while *i < cs.len() && n < 6 && cs[*i].is_ascii_hexdigit() {
                         *i += 1;

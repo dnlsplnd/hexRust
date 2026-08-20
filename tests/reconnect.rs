@@ -1,6 +1,6 @@
 //! Reconnection behaviour, driven through the real backend.
 
-use hexrust::backend::start_backend;
+use hexrust::backend::{reconnect_delay, start_backend};
 use hexrust::model::{BackendCmd, IrcConfig, UiEvent};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -108,9 +108,28 @@ fn a_dropped_connection_is_retried() {
     );
 }
 
-/// Backoff must grow, or a server that is down gets hammered.
+/// The backoff policy itself, asserted directly. Timing this from the outside
+/// makes the test depend on machine load, which is how it turns flaky.
 #[test]
-fn repeated_failures_back_off() {
+fn the_backoff_policy_grows_and_then_holds() {
+    let seq: Vec<u64> = (1..=8).map(reconnect_delay).collect();
+    assert_eq!(seq, vec![1, 2, 4, 8, 16, 30, 30, 30], "unexpected backoff: {seq:?}");
+
+    assert!(seq.windows(2).all(|w| w[1] >= w[0]), "delay is not monotonic");
+    assert!(
+        seq.iter().all(|d| *d <= 30),
+        "delay exceeded the cap, which would strand a reconnect for minutes"
+    );
+    assert!(seq[0] >= 1, "first retry is immediate, which is a hot loop");
+
+    // Far beyond any real attempt count, to be sure the shift cannot overflow.
+    assert_eq!(reconnect_delay(u32::MAX), 30);
+    assert_eq!(reconnect_delay(0), 1);
+}
+
+/// A server that keeps refusing must be retried repeatedly, and slowly.
+#[test]
+fn repeated_failures_keep_retrying_without_hammering() {
     let (port, count) = mock_server(|s| {
         let _ = s.shutdown(std::net::Shutdown::Both);
     });
@@ -120,8 +139,21 @@ fn repeated_failures_back_off() {
     let tx = start_backend(ui_tx);
     tx.send(BackendCmd::Connect { conn_id: 1, cfg: cfg(port) }).unwrap();
 
-    // Long enough for several attempts at 1s, 2s, 4s.
-    std::thread::sleep(Duration::from_secs(9));
+    // Poll rather than sleeping a fixed span, so a loaded machine makes this
+    // slower rather than failing it.
+    let start = Instant::now();
+    assert!(
+        wait_until(Duration::from_secs(30), || count.load(Ordering::SeqCst) >= 3),
+        "gave up retrying; attempts seen: {}",
+        count.load(Ordering::SeqCst)
+    );
+
+    // Three attempts require at least the 1s and 2s waits to have elapsed.
+    assert!(
+        start.elapsed() >= Duration::from_secs(3),
+        "retried far too fast: 3 attempts in {:?}",
+        start.elapsed()
+    );
 
     let l = lines.lock().unwrap().clone();
     let delays: Vec<u64> = l
@@ -133,16 +165,10 @@ fn repeated_failures_back_off() {
             rest[..j].parse::<u64>().ok()
         })
         .collect();
-
-    assert!(delays.len() >= 3, "too few attempts to judge backoff: {delays:?}");
     assert!(
         delays.windows(2).all(|w| w[1] >= w[0]),
-        "delay did not grow monotonically: {delays:?}"
+        "reported delays did not grow: {delays:?}"
     );
-    assert!(delays[0] < delays[delays.len() - 1], "no backoff at all: {delays:?}");
-
-    let seen = count.load(Ordering::SeqCst);
-    assert!(seen < 20, "hammered the server with {seen} attempts in 9s");
 }
 
 /// Disconnecting on purpose must not be undone by the reconnect loop.
@@ -182,5 +208,46 @@ fn an_explicit_disconnect_is_not_retried() {
         count.load(Ordering::SeqCst),
         1,
         "reconnected after the user asked to disconnect"
+    );
+}
+
+
+/// A server closing cleanly must let the connection task finish.
+///
+/// irc_run drops its own sender and waits for the writer task, but the
+/// backend holds another clone of that sender, so the channel never closes
+/// on its own. Waiting unconditionally hung the task forever on exactly the
+/// ordinary case of a server hanging up, which stalled the reconnect loop.
+#[test]
+fn a_clean_server_close_lets_the_connection_finish() {
+    let (port, count) = mock_server(|s| {
+        wait_for_user(s);
+        // A well-behaved close: greet, then shut down the write side so the
+        // client sees end-of-stream rather than an error.
+        let _ = s.write_all(b":srv 001 n :Welcome\r\n");
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = s.shutdown(std::net::Shutdown::Write);
+        std::thread::sleep(Duration::from_millis(200));
+    });
+
+    let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>();
+    let lines = collect(ui_rx);
+    let tx = start_backend(ui_tx);
+    tx.send(BackendCmd::Connect { conn_id: 1, cfg: cfg(port) }).unwrap();
+
+    // The close is reported only after the run actually returns, so seeing it
+    // is what proves the task did not hang.
+    assert!(
+        wait_until(Duration::from_secs(15), || {
+            lines.lock().unwrap().iter().any(|l| l.contains("Connection closed"))
+        }),
+        "the connection task never finished after a clean close: {:?}",
+        lines.lock().unwrap()
+    );
+
+    assert!(
+        wait_until(Duration::from_secs(15), || count.load(Ordering::SeqCst) >= 2),
+        "no reconnect after a clean close; connections seen: {}",
+        count.load(Ordering::SeqCst)
     );
 }

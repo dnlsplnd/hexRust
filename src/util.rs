@@ -3,7 +3,7 @@ use time::OffsetDateTime;
 
 pub fn ts_prefix() -> String {
     // Prefer local time, fall back to UTC if local offset is unavailable.
-    let fmt = format_description::parse("[hour]:[minute]:[second]").unwrap();
+    let fmt = format_description::parse_borrowed::<2>("[hour]:[minute]:[second]").unwrap();
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     let s = now.format(&fmt).unwrap_or_else(|_| "??:??:??".to_string());
     format!("[{s}]")

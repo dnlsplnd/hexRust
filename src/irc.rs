@@ -74,23 +74,6 @@ fn next_nick(current: &str) -> String {
     chars.into_iter().collect()
 }
 
-/// Strips the `:server 251 mynick` preamble from a numeric reply, leaving the
-/// human-readable remainder. Returns None if the line is not a numeric for us.
-fn strip_numeric_preamble(line: &str, my_nick: &str) -> Option<String> {
-    let rest = line.strip_prefix(':')?;
-    let (_server, rest) = rest.split_once(' ')?;
-    let (code, rest) = rest.split_once(' ')?;
-    if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    // The first parameter of a numeric addressed to us is our own nick.
-    let rest = match rest.split_once(' ') {
-        Some((target, tail)) if target == my_nick || target == "*" => tail,
-        _ => rest,
-    };
-    Some(rest.strip_prefix(':').unwrap_or(rest).to_string())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaslState {
     Idle,
@@ -284,8 +267,20 @@ pub async fn irc_run(
         route_irc_line(conn_id, &line, &mut my_nick_net, &ui_tx, &raw_tx);
     }
 
+    // Dropping our own sender is not enough to end the writer: the backend
+    // holds another clone of it in the connection handle, so the channel
+    // stays open and `raw_rx.recv()` never returns None. Awaiting the writer
+    // unconditionally therefore blocks forever on a clean close, which is the
+    // ordinary case when a server hangs up. Give it a moment to flush a
+    // pending QUIT, then stop it.
     drop(raw_tx);
-    let _ = writer.await;
+    let mut writer = writer;
+    if tokio::time::timeout(std::time::Duration::from_secs(2), &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+    }
 
     ui_tx.send(UiEvent::Append {
         conn_id,
@@ -590,7 +585,9 @@ fn route_irc_line(
 
     // Default: Status. Numerics get their ":server 251 mynick" preamble
     // stripped, which is all noise to the reader.
-    let shown = strip_numeric_preamble(line, my_nick_net).unwrap_or_else(|| line.to_string());
+    let shown = crate::numerics::render(line, my_nick_net)
+        .or_else(|| crate::numerics::strip_preamble(line, my_nick_net))
+        .unwrap_or_else(|| line.to_string());
     let _ = ui_tx.send(UiEvent::Append {
         conn_id,
         buffer: "Status".to_string(),
@@ -720,7 +717,7 @@ fn ctcp_reply(cmd: &str, arg: &str) -> Option<String> {
 
 fn local_time_string() -> String {
     use time::format_description;
-    let fmt = format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")
+    let fmt = format_description::parse_borrowed::<2>("[year]-[month]-[day] [hour]:[minute]:[second]")
         .expect("static format");
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     now.format(&fmt).unwrap_or_else(|_| "unknown".to_string())
